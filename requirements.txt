@@ -1,0 +1,40 @@
+# ── Web framework ────────────────────────────────────────────────────────────
+streamlit>=1.35.0
+
+# ── OpenAI / Agents SDK ───────────────────────────────────────────────────────
+openai>=1.30.0
+openai-agents>=0.0.11          # OpenAI Agents SDK (pip install openai-agents)
+
+# ── Vector store (local, no server needed) ───────────────────────────────────
+chromadb>=0.5.0
+
+# ── File parsing ─────────────────────────────────────────────────────────────
+pymupdf>=1.24.0                # PDF text + image extraction  (import fitz)
+python-docx>=1.1.0             # .docx reading / writing
+openpyxl>=3.1.0                # .xlsx reading
+pillow>=10.3.0                 # Image handling (PNG, JPG, etc.)
+python-pptx>=0.6.23            # .pptx reading
+
+# ── Web search / scraping ────────────────────────────────────────────────────
+requests>=2.31.0
+beautifulsoup4>=4.12.0
+duckduckgo-search>=6.1.0       # Free, no-key web search for agents
+
+# ── Data handling & utilities ────────────────────────────────────────────────
+pandas>=2.2.0
+python-dotenv>=1.0.0           # Load .env for API keys
+pydantic>=2.7.0                # Data validation / structured outputs
+tiktoken>=0.7.0                # Token counting for context management
+tenacity>=8.3.0                # Retry logic for API calls
+
+# ── Document generation (report output) ──────────────────────────────────────
+jinja2>=3.1.0                  # Template rendering engine
+reportlab>=4.2.0               # PDF generation for output reports
+markdown>=3.6                  # Markdown → HTML for previews
+
+# ── Diagram generation (future P&ID / PFD work) ──────────────────────────────
+matplotlib>=3.9.0              # Basic diagram scaffolding
+networkx>=3.3                  # Graph structures for P&ID topology
+
+# ── Dev / testing ─────────────────────────────────────────────────────────────
+python-dotenv>=1.0.0

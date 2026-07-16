@@ -34,7 +34,13 @@ class FileAgent(BaseAgent):
         results = []
         for path in paths:
             self._log(f"Analysing: {path.name}")
-            result = self._analyze_single(path, naming_scheme, reference_files)
+            try:
+                result = self._analyze_single(path, naming_scheme, reference_files)
+            except Exception as e:
+                self._log(f"  AI analysis failed ({e}), falling back to rule-based.")
+                result = self._classifier.classify(path)
+                result["original_path"] = str(path)
+                result["confidence"] = "low"
             results.append(result)
             self._log(f"  → {result.get('doc_type', 'Unknown')} | {result.get('suggested_name', path.name)}")
 

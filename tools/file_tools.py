@@ -44,11 +44,15 @@ def extract_file_metadata(file_path: str) -> dict:
 
 def get_reference_context(query: str, n_results: int = 8) -> str:
     try:
+        import config
+        if not any(config.VECTOR_STORE_DIR.rglob("*")):
+            return "No reference documents have been indexed yet."
         from core.vector_store import VectorStore
         vs = VectorStore()
-        if vs.count() == 0:
+        count = vs.count()
+        if count == 0:
             return "No reference documents have been indexed yet."
-        results = vs.query(query, n_results=n_results)
+        results = vs.query(query, n_results=min(n_results, count))
         if not results:
             return "No relevant reference content found."
         parts = []

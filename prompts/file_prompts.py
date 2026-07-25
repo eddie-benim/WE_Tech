@@ -13,8 +13,8 @@ Rules:
 - Identify the document type based on content, layout clues, and filename
 - Extract all identifiable metadata fields: project number, revision, client, \
   date, unit operations, instrumentation tags, process conditions
-- Where the file is an image (PNG, JPG) describe what you can infer from the \
-  filename and any text present
+- Where vision analysis output is provided, treat it as the primary source of truth \
+  for equipment and instrumentation — it reflects what is actually drawn in the diagram
 - Propose a clean filename following the company naming scheme provided
 - Return your response as valid JSON only — no commentary, no markdown fences
 - If you are uncertain about a field, set its value to null rather than guessing
@@ -28,7 +28,18 @@ def build_file_analysis_prompt(
     rule_based_result: dict,
     naming_scheme: dict,
     reference_context: str,
+    vision_description: str = "",
 ) -> str:
+    vision_section = ""
+    if vision_description:
+        vision_section = f"""
+## Vision Analysis (GPT-4o image reading)
+The following was extracted by visually reading the diagram image. \
+This is the primary source for equipment, instrumentation, and layout details:
+
+{vision_description}
+"""
+
     return f"""\
 Analyse the following engineering file and return a JSON metadata object.
 
@@ -38,8 +49,8 @@ Analyse the following engineering file and return a JSON metadata object.
 - **Rule-based classification (pre-computed):** {rule_based_result}
 
 ## Extracted Text Sample
-{text_sample or "No text could be extracted (may be an image or scanned document)."}
-
+{text_sample or "No text could be extracted (image or scanned document — see vision analysis below)."}
+{vision_section}
 ## Company Naming Scheme
 The company uses the following file naming convention:
 - Scheme: {naming_scheme.get("scheme", "PROJECT-NUMBER_DOC-TYPE_DESCRIPTION_REVISION")}
@@ -61,14 +72,17 @@ The company uses the following file naming convention:
     "client": "<string or null>",
     "date": "<string or null>",
     "description": "<brief human-readable description of content>",
-    "unit_operations": ["<list of identified unit operations>"],
-    "instrumentation": ["<list of instrument tag numbers>"],
+    "unit_operations": ["<every piece of process equipment identified>"],
+    "instrumentation": ["<every instrument tag number identified>"],
+    "control_loops": ["<control loop descriptions if visible>"],
+    "process_streams": ["<key stream descriptions>"],
     "process_conditions": {{
       "temperature": "<string or null>",
       "pressure": "<string or null>",
       "flow": "<string or null>"
     }},
-    "unique_elements": ["<list of notable or unusual elements in this document>"]
+    "unique_elements": ["<notable or unusual elements>"],
+    "vision_description": "<full vision analysis text if provided, else null>"
   }},
   "confidence": "<high | medium | low>"
 }}
@@ -95,5 +109,46 @@ Return your response as JSON only:
   "components": ["<ordered list of component names>"],
   "confidence": "<high | medium | low>",
   "notes": "<any observations about inconsistencies or variations>"
+}}
+"""
+
+
+def build_project_match_prompt(
+    new_file_result: dict,
+    similar_files: list[dict],
+) -> str:
+    meta = new_file_result.get("metadata", {})
+    unit_ops = meta.get("unit_operations", [])
+    instruments = meta.get("instrumentation", [])
+    doc_type = new_file_result.get("doc_type", "Unknown")
+
+    candidates = ""
+    for i, f in enumerate(similar_files, 1):
+        candidates += (
+            f"{i}. {f.get('filename', '')} | Project: {f.get('project_number', '—')} | "
+            f"Type: {f.get('doc_type', '—')} | Similarity: {f.get('similarity', 0):.2f} | "
+            f"Equipment: {', '.join(f.get('unit_operations', [])[:5])}\n"
+        )
+
+    return f"""\
+A new engineering file has been analysed. Determine which existing project it most \
+likely belongs to, based on the evidence below.
+
+## New File
+- Document type: {doc_type}
+- Unit operations identified: {', '.join(unit_ops) if unit_ops else 'none'}
+- Instrumentation tags: {', '.join(instruments[:15]) if instruments else 'none'}
+- Description: {meta.get('description', '—')}
+- Vision summary: {meta.get('vision_description', '')[:400] if meta.get('vision_description') else 'not available'}
+
+## Most Similar Existing Files (by vector similarity)
+{candidates or "No existing files in the database yet."}
+
+Return JSON only:
+{{
+  "matched_project_number": "<project number or null if no confident match>",
+  "matched_project_confidence": "<high | medium | low | none>",
+  "reasoning": "<one sentence explaining the match>",
+  "recommended_folder": "<suggested folder path relative to output root>"
 }}
 """

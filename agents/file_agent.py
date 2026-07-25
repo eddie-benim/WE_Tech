@@ -47,13 +47,29 @@ class FileAgent(BaseAgent):
         results = []
         for path in paths:
             self._log(f"Analysing: {path.name}")
+            vision_description = ""
             try:
                 result = self._analyze_single(path, naming_scheme, reference_files)
             except Exception as e:
-                self._log(f"  AI analysis failed ({e}), falling back to rule-based.")
+                self._log(f"  Full AI analysis failed: {e}")
+                self._log(f"  Attempting standalone vision before falling back...")
+                ext = path.suffix.lower()
+                if ext in IMAGE_EXTENSIONS or ext in PDF_AS_IMAGE_EXTENSIONS:
+                    try:
+                        api_key = os.environ.get("OPENAI_API_KEY") or config.OPENAI_API_KEY
+                        vision_description = self._extractor.extract_vision_description(path, api_key=api_key)
+                        self._log(f"  Standalone vision OK ({len(vision_description)} chars).")
+                    except Exception as ve:
+                        self._log(f"  Standalone vision also failed: {ve}")
                 result = self._classifier.classify(path)
                 result["original_path"] = str(path)
                 result["confidence"] = "low"
+                if vision_description:
+                    result.setdefault("metadata", {})["vision_description"] = vision_description
+                    parsed_meta = self._extractor.extract_metadata_from_vision(vision_description, path)
+                    for k, v in parsed_meta.items():
+                        if v and k != "vision_description":
+                            result["metadata"].setdefault(k, v)
 
             if has_vs and vs:
                 try:

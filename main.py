@@ -6,6 +6,7 @@ import config
 from ui.report_ui import render_report_tab
 from ui.file_ui import render_file_tab
 from ui.library_ui import render_library_tab
+from ui.query_ui import render_query_tab
 
 st.set_page_config(
     page_title=config.APP_TITLE,
@@ -197,7 +198,10 @@ def main():
         unsafe_allow_html=True,
     )
 
-    tab_report, tab_files, tab_library = st.tabs(config.NAV_TABS)
+    tab_query, tab_report, tab_files, tab_library = st.tabs(config.NAV_TABS)
+
+    with tab_query:
+        render_query_tab()
 
     with tab_report:
         render_report_tab()

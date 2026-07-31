@@ -41,6 +41,68 @@ class MetadataExtractor:
         image_b64 = base64.b64encode(path.read_bytes()).decode("utf-8")
         return self._call_vision_api(image_b64, mime, api_key)
 
+    VISION_PROMPT = (
+        "You are a senior process engineer and instrumentation specialist with deep knowledge "
+        "of ISA 5.1 instrumentation symbology and P&ID/PFD conventions.\n\n"
+        "Analyse this engineering diagram image with extreme care and precision. "
+        "Your output will be used to build a searchable metadata database, so accuracy is critical.\n\n"
+        "=== CRITICAL RULES — READ BEFORE ANALYSING ===\n"
+        "1. INSTRUMENT TAGS ONLY appear inside circles, bubbles, squares, or diamonds drawn "
+        "on the diagram itself. DO NOT extract numbers from: title blocks, revision tables, "
+        "drawing borders, coordinate grids, sheet numbers, contract numbers, P.O. numbers, "
+        "dates, or personnel signature blocks.\n"
+        "2. Every instrument tag must consist of a VALID ISA function letter prefix followed "
+        "by a number. Valid prefixes include (but are not limited to):\n"
+        "   P=Pressure, T=Temperature, F=Flow, L=Level, A=Analysis, V=Vibration, S=Speed/Switch\n"
+        "   Modifier letters: D=Differential, I=Indicating, T=Transmitting, C=Controller, "
+        "V=Valve, R=Recording, A=Alarm, H=High, L=Low, E=Element, G=Gauge\n"
+        "   Examples of valid full tags: PDI, PDIT, FIT, FCV, FE, FI, PI, PCV, LCV, LT, "
+        "PSV, PSE, PAH, PIT, SV, FT, PT, TC, TE, TT, TI, LC, LI, LE, PG\n"
+        "3. If you cannot clearly read a label, write UNREADABLE rather than guessing.\n"
+        "4. Do NOT invent or extrapolate tags. If you see PDI 1610 write exactly PDI-1610. "
+        "Do not convert it to PL-1610 or any other prefix.\n"
+        "5. Numbers that appear ONLY in the title block (drawing number, W.O. number, "
+        "contract number, P.O. number, revision number, dates) must NOT be listed as instrument tags.\n\n"
+        "=== WHAT TO EXTRACT ===\n\n"
+        "1. DOCUMENT TYPE\n"
+        "   What kind of document is this? (P&ID, PFD, System Diagram, Isometric, GA Drawing, etc.)\n\n"
+        "2. TITLE BLOCK (bottom-right corner area)\n"
+        "   - Drawing title\n"
+        "   - Document/drawing number\n"
+        "   - Revision number and date\n"
+        "   - Client or company name\n"
+        "   - Project name or number\n"
+        "   - Contractor/vendor name\n"
+        "   - Sheet number\n\n"
+        "3. UNIT OPERATIONS & MAJOR EQUIPMENT\n"
+        "   List every piece of process equipment with its label as written on the diagram:\n"
+        "   - Compressors, turbines, expanders (with tag/label)\n"
+        "   - Pumps, motors, drivers (with tag/label)\n"
+        "   - Vessels, drums, tanks, separators (with tag/label)\n"
+        "   - Heat exchangers, coolers, heaters (with tag/label)\n"
+        "   - Skids or packaged units (with label/boundary description)\n"
+        "   - Any sub-panels or systems shown in dashed boundaries\n\n"
+        "4. INSTRUMENTATION TAGS\n"
+        "   List EVERY instrument bubble/circle you can read on the diagram body "
+        "(NOT the title block). Format each as PREFIX-NUMBER (e.g. PDI-1610, FCV-1611).\n"
+        "   Group by type if helpful. Include all HI/LO/HH/LL alarm setpoint annotations "
+        "if shown next to bubbles.\n\n"
+        "5. PIPING & PIPE SPECIFICATIONS\n"
+        "   List pipe specifications shown (e.g. 0.5-089-7, 1.0-089-7) "
+        "and note where they appear if discernible.\n\n"
+        "6. CONTROL LOOPS & SIGNAL LINES\n"
+        "   Describe any control loops visible — what instrument drives what valve, "
+        "any signal lines shown as dashed lines between instruments.\n\n"
+        "7. PROCESS STREAMS & CONNECTIONS\n"
+        "   Describe major process connections: supply lines, drain lines, vent lines, "
+        "any labelled streams.\n\n"
+        "8. LEGEND / NOTES / SPECIAL ANNOTATIONS\n"
+        "   Any legend box content, general notes, safety annotations, or special markings.\n\n"
+        "9. UNIQUE OR NOTABLE ELEMENTS\n"
+        "   Anything distinctive: unusual equipment configurations, safety-critical markings, "
+        "non-standard symbols, vendor-specific elements."
+    )
+
     def _call_vision_api(self, image_b64: str, mime: str, api_key: str) -> str:
         from openai import OpenAI
         key = api_key or os.environ.get("OPENAI_API_KEY", "")
@@ -49,7 +111,7 @@ class MetadataExtractor:
         client = OpenAI(api_key=key)
         response = client.chat.completions.create(
             model="gpt-4o",
-            max_tokens=1200,
+            max_tokens=2000,
             messages=[
                 {
                     "role": "user",
@@ -63,22 +125,7 @@ class MetadataExtractor:
                         },
                         {
                             "type": "text",
-                            "text": (
-                                "You are an expert process engineer analysing an engineering diagram. "
-                                "Examine this image carefully and extract the following as a structured description:\n\n"
-                                "1. DOCUMENT TYPE: What kind of diagram is this? (P&ID, PFD, isometric, GA, etc.)\n"
-                                "2. TITLE BLOCK: Any project name, number, revision, date, client, or document number visible\n"
-                                "3. UNIT OPERATIONS: Every piece of process equipment visible — compressors, pumps, vessels, "
-                                "heat exchangers, columns, reactors, drums, tanks, motors, drivers. Include their tag numbers if labelled.\n"
-                                "4. INSTRUMENTATION: Every instrument tag visible (e.g. PT-101, FIC-202, LV-301). "
-                                "List all you can read.\n"
-                                "5. CONTROL LOOPS: Any control loops or signal lines described in legends or shown on the diagram\n"
-                                "6. PROCESS STREAMS: Key streams, flow directions, pipe sizes if shown\n"
-                                "7. UNIQUE ELEMENTS: Anything distinctive about this diagram — unusual equipment, "
-                                "special annotations, non-standard symbols\n"
-                                "8. LEGEND / ABBREVIATIONS: Any legend box content\n\n"
-                                "Be as specific and complete as possible. Read every label you can make out."
-                            ),
+                            "text": self.VISION_PROMPT,
                         },
                     ],
                 }
@@ -90,7 +137,7 @@ class MetadataExtractor:
         import fitz
         doc = fitz.open(str(path))
         page = doc[0]
-        mat = fitz.Matrix(2.0, 2.0)
+        mat = fitz.Matrix(3.0, 3.0)
         pix = page.get_pixmap(matrix=mat)
         doc.close()
         return base64.b64encode(pix.tobytes("png")).decode("utf-8")
@@ -194,13 +241,34 @@ class MetadataExtractor:
                 found.append(kw)
         return found
 
+    VALID_ISA_PREFIXES = {
+        "PI", "PDI", "PDIT", "PT", "PIT", "PG", "PCV", "PSV", "PSE", "PAH", "PAL",
+        "PAHH", "PALL", "PIC", "PR", "PY",
+        "TI", "TT", "TE", "TC", "TIC", "TR", "TCV", "TAH", "TAL",
+        "FI", "FT", "FE", "FIT", "FC", "FCV", "FIC", "FR", "FAH", "FAL", "FL",
+        "LI", "LT", "LE", "LC", "LCV", "LIC", "LAH", "LAL", "LAHH", "LALL",
+        "AI", "AT", "AE", "AC", "ACV", "AIC",
+        "SI", "ST", "SE", "SC", "SCV", "SIC", "SV",
+        "VI", "VT", "VE", "VC",
+        "HV", "XV", "ZV", "YV",
+        "HS", "XS", "ZS", "YS",
+        "HI", "XI", "ZI", "YI",
+        "FCV", "LCV", "TCV", "PCV",
+    }
+
     def _find_instrumentation(self, text: str) -> list[str]:
-        tags = re.findall(r"\b([A-Z]{1,3}[A-Z][-_]?\d{3,5}[A-Z]?)\b", text)
+        candidates = re.findall(r"\b([A-Z]{2,5}[-_]?\d{3,5}[A-Z]?)\b", text)
         seen = []
-        for t in tags:
-            if t not in seen:
-                seen.append(t)
-        return seen[:40]
+        for tag in candidates:
+            prefix = re.match(r"^([A-Z]+)", tag)
+            if not prefix:
+                continue
+            if prefix.group(1) not in self.VALID_ISA_PREFIXES:
+                continue
+            normalised = re.sub(r"[-_]", "-", tag)
+            if normalised not in seen:
+                seen.append(normalised)
+        return seen[:60]
 
     def _read_pdf(self, path: Path, max_chars: int) -> str:
         import fitz

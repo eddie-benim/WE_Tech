@@ -1,12 +1,94 @@
 from __future__ import annotations
 
 import base64
+import io
 import os
 import re
 from pathlib import Path
 
 
 class MetadataExtractor:
+
+    VALID_ISA_PREFIXES = {
+        "PI", "PDI", "PDIT", "PT", "PIT", "PG", "PCV", "PSV", "PSE", "PAH", "PAL",
+        "PAHH", "PALL", "PIC", "PR", "PY", "PDT",
+        "TI", "TT", "TE", "TC", "TIC", "TR", "TCV", "TAH", "TAL",
+        "FI", "FT", "FE", "FIT", "FC", "FCV", "FIC", "FR", "FAH", "FAL", "FL",
+        "LI", "LT", "LE", "LC", "LCV", "LIC", "LAH", "LAL", "LAHH", "LALL",
+        "AI", "AT", "AE", "AC", "ACV", "AIC",
+        "SI", "ST", "SE", "SC", "SCV", "SIC", "SV",
+        "VI", "VT", "VE", "VC",
+        "HV", "XV", "ZV", "YV",
+        "HS", "XS", "ZS", "YS",
+        "HI", "XI", "ZI", "YI",
+        "PH", "PL", "TH", "TL", "FH", "FL", "LH", "LL",
+        "PAH", "TAH", "FAH", "LAH",
+    }
+
+    TILE_INSTRUMENT_PROMPT = (
+        "You are an ISA 5.1 instrumentation specialist reading a CROPPED SECTION of a P&ID or engineering diagram.\n\n"
+        "YOUR ONLY JOB: List every instrument tag bubble visible in this image section.\n\n"
+        "STRICT RULES:\n"
+        "- Instrument tags ONLY appear inside circles, ovals, squares, or hexagons drawn on the diagram\n"
+        "- Valid ISA prefixes: PI, PDI, PDIT, PDT, PT, PIT, PG, PCV, PSV, PSE, PAH, PAL, PAHH, PALL, PH, "
+        "TI, TT, TE, TC, TCV, TAH, TAL, "
+        "FI, FT, FE, FIT, FC, FCV, FAH, FAL, FL, "
+        "LI, LT, LE, LC, LCV, LAH, LAL, LAHH, LALL, "
+        "SV, SI, ST, SE, HV, XV, ZV, HS, XS, ZS, "
+        "PIT, FIC, LIC, TIC, PIC\n"
+        "- DO NOT read numbers from: title blocks, revision tables, coordinates, borders, dates, "
+        "P.O. numbers, contract numbers, drawing numbers, personnel initials/signatures\n"
+        "- If you cannot clearly read a tag, write UNREADABLE\n"
+        "- DO NOT guess or fabricate. If unsure of a digit, write the prefix and UNREADABLE (e.g. PDI-????)\n"
+        "- Note any HI/LO/HH/LL setpoint values shown adjacent to bubbles\n\n"
+        "OUTPUT FORMAT — return ONLY a plain list, one tag per line, nothing else:\n"
+        "PDI-1610 (HI, LO)\n"
+        "FIT-1611 (HI, LO)\n"
+        "FCV-1611\n"
+        "UNREADABLE\n"
+    )
+
+    CONTEXT_PROMPT = (
+        "You are a senior process engineer reading a full engineering diagram.\n\n"
+        "Extract ONLY the following — be factual, do not guess:\n\n"
+        "1. DOCUMENT TYPE: (P&ID, PFD, System Diagram, GA, Isometric, etc.)\n\n"
+        "2. TITLE BLOCK: Extract exactly as written:\n"
+        "   - Drawing title\n"
+        "   - Drawing/document number\n"
+        "   - Revision number\n"
+        "   - Date\n"
+        "   - Company/vendor name\n"
+        "   - Client name\n"
+        "   - Project name\n"
+        "   - Sheet number (e.g. SH. 1 OF 2)\n\n"
+        "3. MAJOR EQUIPMENT: List each piece of process equipment with its exact label as written:\n"
+        "   - Compressors, pumps, motors, drivers\n"
+        "   - Vessels, drums, tanks\n"
+        "   - Heat exchangers, coolers\n"
+        "   - Skid boundaries and panel boundaries (dashed box labels)\n\n"
+        "4. PIPE SPECIFICATIONS: List any pipe spec labels visible (e.g. 0.5-089-7, 1.0-089-7, 2.0-256-216C)\n\n"
+        "5. PROCESS STREAMS: Named streams, supply lines, vent lines, drain lines\n\n"
+        "6. NOTES/SAFETY: Any general notes, safety annotations, or legend content\n\n"
+        "7. UNIQUE ELEMENTS: Anything distinctive about this diagram\n\n"
+        "DO NOT list instrument tags here — those are handled separately.\n"
+        "If you cannot read something clearly, omit it rather than guessing.\n"
+    )
+
+    RECONCILIATION_PROMPT = (
+        "You are an ISA 5.1 instrumentation specialist.\n\n"
+        "Below is a RAW LIST of instrument tags extracted from multiple tile scans of a P&ID. "
+        "Some may be duplicates, some may be misread, and some may be fabricated by the AI.\n\n"
+        "Your job:\n"
+        "1. Deduplicate — merge identical tags\n"
+        "2. Correct obvious misreads — e.g. if you see both PDI-1610 and POI-1610, keep PDI-1610\n"
+        "3. Remove any tags whose prefix is not a valid ISA function letter combination\n"
+        "4. Remove any tags that look like they came from a title block "
+        "(drawing numbers, dates, contract numbers, P.O. numbers tend to be 7+ digits or contain slashes)\n"
+        "5. Flag any tag you are uncertain about with a ? suffix\n\n"
+        "RAW TAG LIST:\n"
+        "{raw_tags}\n\n"
+        "Return ONLY a clean deduplicated list, one tag per line. No commentary.\n"
+    )
 
     def extract_text_sample(self, path: Path, max_chars: int = 2000) -> str:
         ext = path.suffix.lower()
@@ -29,118 +111,191 @@ class MetadataExtractor:
 
     def extract_vision_description(self, path: Path, api_key: str = "") -> str:
         ext = path.suffix.lower()
-        if ext not in (".png", ".jpg", ".jpeg"):
-            try:
-                pdf_image = self._pdf_first_page_as_image(path)
-                if pdf_image:
-                    return self._call_vision_api(pdf_image, "image/png", api_key)
-            except Exception:
+        try:
+            if ext in (".png", ".jpg", ".jpeg"):
+                image_b64 = base64.b64encode(path.read_bytes()).decode("utf-8")
+                mime = "image/png" if ext == ".png" else "image/jpeg"
+                pil_image = self._b64_to_pil(image_b64)
+            elif ext == ".pdf":
+                pil_image = self._pdf_to_pil(path)
+                image_b64 = None
+                mime = "image/png"
+            else:
                 return ""
-            return ""
-        mime = "image/png" if ext == ".png" else "image/jpeg"
-        image_b64 = base64.b64encode(path.read_bytes()).decode("utf-8")
-        return self._call_vision_api(image_b64, mime, api_key)
+        except Exception as e:
+            return f"Image load failed: {e}"
 
-    VISION_PROMPT = (
-        "You are a senior process engineer and instrumentation specialist with deep knowledge "
-        "of ISA 5.1 instrumentation symbology and P&ID/PFD conventions.\n\n"
-        "Analyse this engineering diagram image with extreme care and precision. "
-        "Your output will be used to build a searchable metadata database, so accuracy is critical.\n\n"
-        "=== CRITICAL RULES — READ BEFORE ANALYSING ===\n"
-        "1. INSTRUMENT TAGS ONLY appear inside circles, bubbles, squares, or diamonds drawn "
-        "on the diagram itself. DO NOT extract numbers from: title blocks, revision tables, "
-        "drawing borders, coordinate grids, sheet numbers, contract numbers, P.O. numbers, "
-        "dates, or personnel signature blocks.\n"
-        "2. Every instrument tag must consist of a VALID ISA function letter prefix followed "
-        "by a number. Valid prefixes include (but are not limited to):\n"
-        "   P=Pressure, T=Temperature, F=Flow, L=Level, A=Analysis, V=Vibration, S=Speed/Switch\n"
-        "   Modifier letters: D=Differential, I=Indicating, T=Transmitting, C=Controller, "
-        "V=Valve, R=Recording, A=Alarm, H=High, L=Low, E=Element, G=Gauge\n"
-        "   Examples of valid full tags: PDI, PDIT, FIT, FCV, FE, FI, PI, PCV, LCV, LT, "
-        "PSV, PSE, PAH, PIT, SV, FT, PT, TC, TE, TT, TI, LC, LI, LE, PG\n"
-        "3. If you cannot clearly read a label, write UNREADABLE rather than guessing.\n"
-        "4. Do NOT invent or extrapolate tags. If you see PDI 1610 write exactly PDI-1610. "
-        "Do not convert it to PL-1610 or any other prefix.\n"
-        "5. Numbers that appear ONLY in the title block (drawing number, W.O. number, "
-        "contract number, P.O. number, revision number, dates) must NOT be listed as instrument tags.\n\n"
-        "=== WHAT TO EXTRACT ===\n\n"
-        "1. DOCUMENT TYPE\n"
-        "   What kind of document is this? (P&ID, PFD, System Diagram, Isometric, GA Drawing, etc.)\n\n"
-        "2. TITLE BLOCK (bottom-right corner area)\n"
-        "   - Drawing title\n"
-        "   - Document/drawing number\n"
-        "   - Revision number and date\n"
-        "   - Client or company name\n"
-        "   - Project name or number\n"
-        "   - Contractor/vendor name\n"
-        "   - Sheet number\n\n"
-        "3. UNIT OPERATIONS & MAJOR EQUIPMENT\n"
-        "   List every piece of process equipment with its label as written on the diagram:\n"
-        "   - Compressors, turbines, expanders (with tag/label)\n"
-        "   - Pumps, motors, drivers (with tag/label)\n"
-        "   - Vessels, drums, tanks, separators (with tag/label)\n"
-        "   - Heat exchangers, coolers, heaters (with tag/label)\n"
-        "   - Skids or packaged units (with label/boundary description)\n"
-        "   - Any sub-panels or systems shown in dashed boundaries\n\n"
-        "4. INSTRUMENTATION TAGS\n"
-        "   List EVERY instrument bubble/circle you can read on the diagram body "
-        "(NOT the title block). Format each as PREFIX-NUMBER (e.g. PDI-1610, FCV-1611).\n"
-        "   Group by type if helpful. Include all HI/LO/HH/LL alarm setpoint annotations "
-        "if shown next to bubbles.\n\n"
-        "5. PIPING & PIPE SPECIFICATIONS\n"
-        "   List pipe specifications shown (e.g. 0.5-089-7, 1.0-089-7) "
-        "and note where they appear if discernible.\n\n"
-        "6. CONTROL LOOPS & SIGNAL LINES\n"
-        "   Describe any control loops visible — what instrument drives what valve, "
-        "any signal lines shown as dashed lines between instruments.\n\n"
-        "7. PROCESS STREAMS & CONNECTIONS\n"
-        "   Describe major process connections: supply lines, drain lines, vent lines, "
-        "any labelled streams.\n\n"
-        "8. LEGEND / NOTES / SPECIAL ANNOTATIONS\n"
-        "   Any legend box content, general notes, safety annotations, or special markings.\n\n"
-        "9. UNIQUE OR NOTABLE ELEMENTS\n"
-        "   Anything distinctive: unusual equipment configurations, safety-critical markings, "
-        "non-standard symbols, vendor-specific elements."
-    )
+        return self._multi_pass_analysis(pil_image, mime, api_key)
 
-    def _call_vision_api(self, image_b64: str, mime: str, api_key: str) -> str:
+    def _multi_pass_analysis(self, pil_image, mime: str, api_key: str) -> str:
+        from PIL import Image
+
+        width, height = pil_image.size
+
+        context_b64 = self._pil_to_b64(pil_image)
+        context_text = self._call_vision(context_b64, mime, self.CONTEXT_PROMPT, api_key, max_tokens=1200)
+
+        tiles = self._make_tiles(pil_image, cols=3, rows=2, overlap_frac=0.12)
+
+        all_raw_tags = []
+        tile_texts = []
+        for i, tile in enumerate(tiles):
+            tile_b64 = self._pil_to_b64(tile)
+            tile_result = self._call_vision(tile_b64, mime, self.TILE_INSTRUMENT_PROMPT, api_key, max_tokens=600)
+            tile_texts.append(f"[Tile {i+1}]\n{tile_result}")
+            tags = self._parse_tag_list(tile_result)
+            all_raw_tags.extend(tags)
+
+        if width > 3000 or height > 2000:
+            detail_tiles = self._make_tiles(pil_image, cols=5, rows=3, overlap_frac=0.15)
+            for i, tile in enumerate(detail_tiles):
+                tile_b64 = self._pil_to_b64(tile)
+                tile_result = self._call_vision(tile_b64, mime, self.TILE_INSTRUMENT_PROMPT, api_key, max_tokens=600)
+                tags = self._parse_tag_list(tile_result)
+                all_raw_tags.extend(tags)
+
+        validated_tags = self._validate_tags_local(all_raw_tags)
+        reconciled_tags = self._reconcile_tags(validated_tags, api_key)
+
+        description = (
+            f"=== CONTEXT ANALYSIS ===\n{context_text}\n\n"
+            f"=== INSTRUMENT TAGS (multi-tile extraction) ===\n"
+            + "\n".join(reconciled_tags) +
+            f"\n\n=== RAW TILE OUTPUTS ===\n" + "\n\n".join(tile_texts)
+        )
+
+        return description
+
+    def _make_tiles(self, image, cols: int, rows: int, overlap_frac: float = 0.1):
+        from PIL import Image
+        w, h = image.size
+        tile_w = int(w / cols)
+        tile_h = int(h / rows)
+        overlap_x = int(tile_w * overlap_frac)
+        overlap_y = int(tile_h * overlap_frac)
+        tiles = []
+        for row in range(rows):
+            for col in range(cols):
+                x0 = max(0, col * tile_w - overlap_x)
+                y0 = max(0, row * tile_h - overlap_y)
+                x1 = min(w, (col + 1) * tile_w + overlap_x)
+                y1 = min(h, (row + 1) * tile_h + overlap_y)
+                tiles.append(image.crop((x0, y0, x1, y1)))
+        return tiles
+
+    def _pil_to_b64(self, image) -> str:
+        buf = io.BytesIO()
+        image.save(buf, format="PNG")
+        return base64.b64encode(buf.getvalue()).decode("utf-8")
+
+    def _b64_to_pil(self, b64_str: str):
+        from PIL import Image
+        data = base64.b64decode(b64_str)
+        return Image.open(io.BytesIO(data))
+
+    def _pdf_to_pil(self, path: Path):
+        import fitz
+        from PIL import Image
+        doc = fitz.open(str(path))
+        page = doc[0]
+        mat = fitz.Matrix(4.0, 4.0)
+        pix = page.get_pixmap(matrix=mat)
+        doc.close()
+        img_data = pix.tobytes("png")
+        return Image.open(io.BytesIO(img_data))
+
+    def _call_vision(self, image_b64: str, mime: str, prompt: str, api_key: str, max_tokens: int = 800) -> str:
         from openai import OpenAI
         key = api_key or os.environ.get("OPENAI_API_KEY", "")
         if not key:
             return ""
         client = OpenAI(api_key=key)
-        response = client.chat.completions.create(
-            model="gpt-4o",
-            max_tokens=2000,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:{mime};base64,{image_b64}",
-                                "detail": "high",
+        try:
+            response = client.chat.completions.create(
+                model="gpt-4o",
+                max_tokens=max_tokens,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:{mime};base64,{image_b64}",
+                                    "detail": "high",
+                                },
                             },
-                        },
-                        {
-                            "type": "text",
-                            "text": self.VISION_PROMPT,
-                        },
-                    ],
-                }
-            ],
-        )
-        return response.choices[0].message.content or ""
+                            {"type": "text", "text": prompt},
+                        ],
+                    }
+                ],
+            )
+            return response.choices[0].message.content or ""
+        except Exception as e:
+            return f"Vision call failed: {e}"
 
-    def _pdf_first_page_as_image(self, path: Path) -> str:
-        import fitz
-        doc = fitz.open(str(path))
-        page = doc[0]
-        mat = fitz.Matrix(3.0, 3.0)
-        pix = page.get_pixmap(matrix=mat)
-        doc.close()
-        return base64.b64encode(pix.tobytes("png")).decode("utf-8")
+    def _parse_tag_list(self, text: str) -> list[str]:
+        tags = []
+        for line in text.splitlines():
+            line = line.strip().strip("-").strip("*").strip()
+            if not line or line.startswith("[") or line.lower().startswith("unreadable"):
+                continue
+            match = re.match(r"([A-Z]{2,5}-\d{3,6}[A-Z]?)(\s.*)?$", line)
+            if match:
+                tags.append(match.group(1))
+        return tags
+
+    def _validate_tags_local(self, tags: list[str]) -> list[str]:
+        validated = []
+        seen = set()
+        for tag in tags:
+            m = re.match(r"^([A-Z]+)-(\d+)([A-Z]?)$", tag)
+            if not m:
+                continue
+            prefix = m.group(1)
+            if prefix not in self.VALID_ISA_PREFIXES:
+                continue
+            if tag not in seen:
+                seen.add(tag)
+                validated.append(tag)
+        return validated
+
+    def _reconcile_tags(self, tags: list[str], api_key: str) -> list[str]:
+        if not tags:
+            return []
+        raw_str = "\n".join(tags)
+        key = api_key or os.environ.get("OPENAI_API_KEY", "")
+        if not key:
+            return tags
+        from openai import OpenAI
+        client = OpenAI(api_key=key)
+        try:
+            response = client.chat.completions.create(
+                model="gpt-4o",
+                max_tokens=600,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": self.RECONCILIATION_PROMPT.format(raw_tags=raw_str),
+                    }
+                ],
+            )
+            result_text = response.choices[0].message.content or ""
+            reconciled = []
+            seen = set()
+            for line in result_text.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                m = re.match(r"([A-Z]{2,5}-\d{3,6}[A-Z]?\??)", line)
+                if m:
+                    tag = m.group(1)
+                    if tag not in seen:
+                        seen.add(tag)
+                        reconciled.append(tag)
+            return reconciled if reconciled else tags
+        except Exception:
+            return tags
 
     def extract_metadata(self, path: Path, text_sample: str, doc_type: str) -> dict:
         meta = {
@@ -156,14 +311,35 @@ class MetadataExtractor:
         return {k: v for k, v in meta.items() if v}
 
     def extract_metadata_from_vision(self, vision_text: str, path: Path) -> dict:
+        instrument_section = ""
+        if "=== INSTRUMENT TAGS" in vision_text:
+            parts = vision_text.split("=== INSTRUMENT TAGS (multi-tile extraction) ===")
+            if len(parts) > 1:
+                instrument_section = parts[1].split("===")[0].strip()
+
+        context_section = ""
+        if "=== CONTEXT ANALYSIS ===" in vision_text:
+            parts = vision_text.split("=== CONTEXT ANALYSIS ===")
+            if len(parts) > 1:
+                context_section = parts[1].split("===")[0].strip()
+
+        combined = context_section + " " + instrument_section
+
+        tags = []
+        for line in instrument_section.splitlines():
+            line = line.strip()
+            m = re.match(r"([A-Z]{2,5}-\d{3,6}[A-Z]?\??)", line)
+            if m:
+                tags.append(m.group(1))
+
         meta = {
-            "project_number": self._find_project_number(path.name, vision_text),
-            "revision": self._find_revision(path.name, vision_text),
+            "project_number": self._find_project_number(path.name, context_section),
+            "revision": self._find_revision(path.name, context_section),
             "description": self._find_description(path.name),
-            "client": self._find_client(vision_text),
-            "date": self._find_date(vision_text),
-            "unit_operations": self._find_unit_operations(vision_text),
-            "instrumentation": self._find_instrumentation(vision_text),
+            "client": self._find_client(context_section),
+            "date": self._find_date(context_section),
+            "unit_operations": self._find_unit_operations(context_section),
+            "instrumentation": tags if tags else self._find_instrumentation(combined),
             "vision_description": vision_text,
         }
         return {k: v for k, v in meta.items() if v}
@@ -233,6 +409,7 @@ class MetadataExtractor:
             "flash drum", "knock-out drum", "slug catcher", "electric motor",
             "driver motor", "aftercooler", "suction drum", "discharge drum",
             "control valve", "relief valve", "check valve", "blowdown",
+            "gas seal", "seal panel", "skid",
         ]
         found = []
         lower = text.lower()
@@ -241,23 +418,8 @@ class MetadataExtractor:
                 found.append(kw)
         return found
 
-    VALID_ISA_PREFIXES = {
-        "PI", "PDI", "PDIT", "PT", "PIT", "PG", "PCV", "PSV", "PSE", "PAH", "PAL",
-        "PAHH", "PALL", "PIC", "PR", "PY",
-        "TI", "TT", "TE", "TC", "TIC", "TR", "TCV", "TAH", "TAL",
-        "FI", "FT", "FE", "FIT", "FC", "FCV", "FIC", "FR", "FAH", "FAL", "FL",
-        "LI", "LT", "LE", "LC", "LCV", "LIC", "LAH", "LAL", "LAHH", "LALL",
-        "AI", "AT", "AE", "AC", "ACV", "AIC",
-        "SI", "ST", "SE", "SC", "SCV", "SIC", "SV",
-        "VI", "VT", "VE", "VC",
-        "HV", "XV", "ZV", "YV",
-        "HS", "XS", "ZS", "YS",
-        "HI", "XI", "ZI", "YI",
-        "FCV", "LCV", "TCV", "PCV",
-    }
-
     def _find_instrumentation(self, text: str) -> list[str]:
-        candidates = re.findall(r"\b([A-Z]{2,5}[-_]?\d{3,5}[A-Z]?)\b", text)
+        candidates = re.findall(r"\b([A-Z]{2,5}-\d{3,5}[A-Z]?)\b", text)
         seen = []
         for tag in candidates:
             prefix = re.match(r"^([A-Z]+)", tag)
@@ -265,9 +427,8 @@ class MetadataExtractor:
                 continue
             if prefix.group(1) not in self.VALID_ISA_PREFIXES:
                 continue
-            normalised = re.sub(r"[-_]", "-", tag)
-            if normalised not in seen:
-                seen.append(normalised)
+            if tag not in seen:
+                seen.append(tag)
         return seen[:60]
 
     def _read_pdf(self, path: Path, max_chars: int) -> str:

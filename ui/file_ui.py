@@ -124,10 +124,32 @@ def _render_file_card(r: dict):
                 unsafe_allow_html=True,
             )
 
-        with st.expander("Vision analysis", expanded=False):
+        specialist = meta.get("specialist_analysis", {})
+
+        SPECIALIST_SECTIONS = [
+            ("fluid_tracing",    "🔵 Process fluid tracing"),
+            ("pressure_ratings", "🔴 Pressure & design conditions"),
+            ("sis_safety",       "⚠️ Safety systems (SIS / ESD / alarms)"),
+            ("control_valves",   "🎛️ Control valves & loops"),
+            ("line_list",        "📋 Line list"),
+            ("engineering_data", "🔧 Engineering data (piping, valves, stamps)"),
+            ("utility_battery",  "🔌 Utility connections & battery limits"),
+        ]
+
+        for key, label in SPECIALIST_SECTIONS:
+            if specialist.get(key):
+                with st.expander(label, expanded=False):
+                    st.markdown(
+                        f"<pre style='font-size:0.78rem;color:#333;white-space:pre-wrap;"
+                        f"background:#f9f9f7;padding:0.6rem;border-radius:3px'>"
+                        f"{specialist[key]}</pre>",
+                        unsafe_allow_html=True,
+                    )
+
+        with st.expander("🔍 Vision analysis (raw)", expanded=False):
             if vision_desc:
                 st.markdown(
-                    f"<p style='font-size:0.82rem;color:#444;white-space:pre-wrap'>{vision_desc}</p>",
+                    f"<p style='font-size:0.78rem;color:#666;white-space:pre-wrap'>{vision_desc}</p>",
                     unsafe_allow_html=True,
                 )
             else:

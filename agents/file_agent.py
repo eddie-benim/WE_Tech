@@ -108,6 +108,7 @@ class FileAgent(BaseAgent):
         text_sample = self._extractor.extract_text_sample(path, max_chars=3000)
 
         vision_description = ""
+        specialist_results = {}
         is_visual = ext in IMAGE_EXTENSIONS or ext in PDF_AS_IMAGE_EXTENSIONS
         if is_visual:
             self._log(f"  Running vision analysis on {path.name}…")
@@ -120,6 +121,18 @@ class FileAgent(BaseAgent):
                     self._log(f"  Vision analysis returned empty.")
             except Exception as e:
                 self._log(f"  Vision analysis failed: {e}")
+
+            if vision_description:
+                try:
+                    from agents.specialist_agents import SpecialistCoordinator
+                    coord = SpecialistCoordinator(model=self.model)
+                    doc_type_guess = rule_result.get("doc_type", "Unknown")
+                    spec_output = coord.run(doc_type_guess, vision_description)
+                    specialist_results = spec_output.get("specialist_results", {})
+                    for log_line in spec_output.get("log", []):
+                        self._log(f"  [specialist] {log_line}")
+                except Exception as e:
+                    self._log(f"  Specialist analysis failed: {e}")
 
         query_parts = [path.name, text_sample[:300], vision_description[:300]]
         query = " ".join(p for p in query_parts if p)
@@ -151,6 +164,8 @@ class FileAgent(BaseAgent):
         metadata = ai_result.get("metadata", rule_result.get("metadata", {}))
         if vision_description and not metadata.get("vision_description"):
             metadata["vision_description"] = vision_description
+        if specialist_results:
+            metadata["specialist_analysis"] = specialist_results
 
         return {
             "original_name": path.name,

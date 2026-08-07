@@ -137,19 +137,29 @@ def _render_file_card(r: dict):
         ]
 
         for key, label in SPECIALIST_SECTIONS:
-            if specialist.get(key):
-                with st.expander(label, expanded=False):
-                    st.markdown(
-                        f"<pre style='font-size:0.78rem;color:#333;white-space:pre-wrap;"
-                        f"background:#f9f9f7;padding:0.6rem;border-radius:3px'>"
-                        f"{specialist[key]}</pre>",
-                        unsafe_allow_html=True,
-                    )
+            raw = specialist.get(key, "")
+            if not raw:
+                continue
+            cleaned = raw.replace("\\n", "\n").replace("\n", "  \n")
+            with st.expander(label, expanded=False):
+                st.markdown(
+                    f"<div style='font-family:IBM Plex Mono,monospace;font-size:0.78rem;"
+                    f"color:#333;background:#f9f9f7;padding:0.8rem;border-radius:3px;"
+                    f"line-height:1.6'>"
+                    + cleaned.replace("\n", "<br>").replace("|", "&#124;")
+                    + "</div>",
+                    unsafe_allow_html=True,
+                )
 
         with st.expander("🔍 Vision analysis (raw)", expanded=False):
             if vision_desc:
+                cleaned_vision = vision_desc.replace("\\n", "\n").replace("\n", "  \n")
                 st.markdown(
-                    f"<p style='font-size:0.78rem;color:#666;white-space:pre-wrap'>{vision_desc}</p>",
+                    f"<div style='font-family:IBM Plex Mono,monospace;font-size:0.75rem;"
+                    f"color:#666;background:#fafaf8;padding:0.6rem;border-radius:3px;"
+                    f"line-height:1.5'>"
+                    + cleaned_vision.replace("\n", "<br>")
+                    + "</div>",
                     unsafe_allow_html=True,
                 )
             else:

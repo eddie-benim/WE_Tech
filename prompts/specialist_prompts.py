@@ -23,6 +23,16 @@ DESTINATION: <final destination: flare / vent / process / drain / atmosphere>
 PHASE: <gas / liquid / two-phase / unknown>
 SPLITS: <any branch points where the stream divides, and where each branch goes>
 NOTES: <flow direction indicators, control points, anything relevant>
+
+
+FORMATTING RULES:
+- Use plain text with actual line breaks between items
+- Use dashes (-) for bullet points
+- Use blank lines between sections
+- Do NOT write \n as a literal escape sequence — use actual line breaks
+- Do NOT output JSON, XML, or markdown code blocks
+- If a field has no data, write N/A or omit the line entirely
+- Keep output concise — do not repeat section headers in the body
 """
 
 FLUID_TRACING_USER = """\
@@ -63,6 +73,16 @@ OPERATING CONDITIONS:
 
 SAFETY DEVICE SET POINTS:
 - <Tag>: Type = <PSV/RV/PSE/RD>, Set P = <value>, Relieving capacity = <value if stated>
+
+
+FORMATTING RULES:
+- Use plain text with actual line breaks between items
+- Use dashes (-) for bullet points
+- Use blank lines between sections
+- Do NOT write \n as a literal escape sequence — use actual line breaks
+- Do NOT output JSON, XML, or markdown code blocks
+- If a field has no data, write N/A or omit the line entirely
+- Keep output concise — do not repeat section headers in the body
 """
 
 PRESSURE_RATING_USER = """\
@@ -118,6 +138,16 @@ ENGINEERING STAMPS:
 
 OTHER ENGINEERING DATA:
 - <anything else of engineering significance>
+
+
+FORMATTING RULES:
+- Use plain text with actual line breaks between items
+- Use dashes (-) for bullet points
+- Use blank lines between sections
+- Do NOT write \n as a literal escape sequence — use actual line breaks
+- Do NOT output JSON, XML, or markdown code blocks
+- If a field has no data, write N/A or omit the line entirely
+- Keep output concise — do not repeat section headers in the body
 """
 
 ENGINEERING_DATA_USER = """\
@@ -173,6 +203,16 @@ SAFETY ANNOTATIONS:
 
 SIS BOUNDARY:
 - <describe if a SIS boundary is shown and what it encompasses>
+
+
+FORMATTING RULES:
+- Use plain text with actual line breaks between items
+- Use dashes (-) for bullet points
+- Use blank lines between sections
+- Do NOT write \n as a literal escape sequence — use actual line breaks
+- Do NOT output JSON, XML, or markdown code blocks
+- If a field has no data, write N/A or omit the line entirely
+- Keep output concise — do not repeat section headers in the body
 """
 
 SIS_SAFETY_USER = """\
@@ -219,6 +259,16 @@ MANUAL OVERRIDES / HAND CONTROL STATIONS:
 
 CONTROL SCHEME NOTES:
 - <any other control strategy observations>
+
+
+FORMATTING RULES:
+- Use plain text with actual line breaks between items
+- Use dashes (-) for bullet points
+- Use blank lines between sections
+- Do NOT write \n as a literal escape sequence — use actual line breaks
+- Do NOT output JSON, XML, or markdown code blocks
+- If a field has no data, write N/A or omit the line entirely
+- Keep output concise — do not repeat section headers in the body
 """
 
 CONTROL_VALVE_USER = """\
@@ -263,6 +313,16 @@ OFF-SHEET CONNECTORS:
 
 INTERCONNECTING DRAWINGS:
 - <list any drawing numbers cross-referenced on this sheet>
+
+
+FORMATTING RULES:
+- Use plain text with actual line breaks between items
+- Use dashes (-) for bullet points
+- Use blank lines between sections
+- Do NOT write \n as a literal escape sequence — use actual line breaks
+- Do NOT output JSON, XML, or markdown code blocks
+- If a field has no data, write N/A or omit the line entirely
+- Keep output concise — do not repeat section headers in the body
 """
 
 UTILITY_BATTERY_USER = """\
@@ -300,6 +360,16 @@ LINE LIST:
 (Fill with actual data from the description. Add rows as needed.)
 
 After the table, note any line numbering convention observations.
+
+
+FORMATTING RULES:
+- Use plain text with actual line breaks between items
+- Use dashes (-) for bullet points
+- Use blank lines between sections
+- Do NOT write \n as a literal escape sequence — use actual line breaks
+- Do NOT output JSON, XML, or markdown code blocks
+- If a field has no data, write N/A or omit the line entirely
+- Keep output concise — do not repeat section headers in the body
 """
 
 LINE_LIST_USER = """\

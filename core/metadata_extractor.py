@@ -38,11 +38,23 @@ class MetadataExtractor:
         "PIT, FIC, LIC, TIC, PIC\n"
         "- DO NOT read numbers from: title blocks, revision tables, coordinates, borders, dates, "
         "P.O. numbers, contract numbers, drawing numbers, personnel initials/signatures\n"
+        "- CHARACTER AMBIGUITY — on engineering drawings these pairs are frequently confused by OCR. "
+        "Always resolve in favour of the ISA-valid interpretation:\n"
+        "  * 0 vs O vs C: a circle-like character in a tag prefix is almost always 0 (zero), not O or C\n"
+        "  * 1 vs I vs l: a vertical stroke in a tag prefix is almost always I (the ISA letter), not 1 or l\n"
+        "  * Example: if you see C0 PDI or 7C PDI written on equipment, the likely reading is 70 PDI (number seventy, then PDI)\n"
+        "  * Example: if you see PD1 in a bubble, the likely correct reading is PDI (Pressure Differential Indicating)\n"
+        "- COMPOUND BUBBLES: some instrument bubbles contain TWO stacked tags in a single circle "
+        "(e.g. PDI on top and PDIT below in the same bubble, or FIT above FI). "
+        "These are TWO separate instruments sharing a bubble — list BOTH on separate lines\n"
+        "- ASSOCIATED TRANSMITTERS: wherever you see a PDI, also look for a co-located PDIT. "
+        "Wherever you see an FI, look for a co-located FIT. List each separately if present\n"
         "- If you cannot clearly read a tag, write UNREADABLE\n"
         "- DO NOT guess or fabricate. If unsure of a digit, write the prefix and UNREADABLE (e.g. PDI-????)\n"
         "- Note any HI/LO/HH/LL setpoint values shown adjacent to bubbles\n\n"
         "OUTPUT FORMAT — return ONLY a plain list, one tag per line, nothing else:\n"
         "PDI-1610 (HI, LO)\n"
+        "PDIT-1610\n"
         "FIT-1611 (HI, LO)\n"
         "FCV-1611\n"
         "UNREADABLE\n"
@@ -51,25 +63,38 @@ class MetadataExtractor:
     CONTEXT_PROMPT = (
         "You are a senior process engineer reading a full engineering diagram.\n\n"
         "Extract ONLY the following — be factual, do not guess:\n\n"
+        "CHARACTER AMBIGUITY NOTE: On engineering drawings, 0 (zero) and O, and 1 (one) and I (capital i) "
+        "are frequently confused. When reading equipment labels: prefer numeric reading for standalone numbers "
+        "(e.g. '70 PDI COMPRESSOR' not '7C PDI' or '70 PD1'); prefer letter reading for ISA prefixes. "
+        "Read equipment labels exactly as they appear character by character and favour the reading that "
+        "makes engineering sense (e.g. a compressor labelled '70 PDI' is a 70-PDI type unit).\n\n"
         "1. DOCUMENT TYPE: (P&ID, PFD, System Diagram, GA, Isometric, etc.)\n\n"
-        "2. TITLE BLOCK: Extract exactly as written:\n"
-        "   - Drawing title\n"
-        "   - Drawing/document number\n"
-        "   - Revision number\n"
-        "   - Date\n"
-        "   - Company/vendor name\n"
-        "   - Client name\n"
-        "   - Project name\n"
-        "   - Sheet number (e.g. SH. 1 OF 2)\n\n"
+        "2. TITLE BLOCK: Extract exactly as written — preserve all distinctions:\n"
+        "   - Drawing title (e.g. 'GAS SEAL SYSTEM DIAGRAM')\n"
+        "   - Drawing number / document number (this is the vendor or engineering firm's internal drawing ID, "
+        "NOT the project number — label it clearly as DRAWING NUMBER)\n"
+        "   - Revision number and date\n"
+        "   - Vendor / contractor name (e.g. DRESSER-RAND, KBR, Worley)\n"
+        "   - Client name (e.g. TRANSCONTINENTAL GAS PIPE LINE)\n"
+        "   - Project name (e.g. MID ATLANTIC CONNECTOR EXPANSION PROJECT) — "
+        "this is NOT the same as the drawing number; label it clearly as PROJECT NAME\n"
+        "   - Work order / purchase order number if present — label as W.O. or P.O., NOT as project number\n"
+        "   - Contract number if present\n"
+        "   - Sheet number (e.g. SH. 1 OF 2)\n"
+        "   - IMPORTANT: Do NOT use the drawing number or W.O./P.O. number as the project number. "
+        "If no explicit project number is visible, write PROJECT NUMBER: NOT STATED\n\n"
         "3. MAJOR EQUIPMENT: List each piece of process equipment with its exact label as written:\n"
-        "   - Compressors, pumps, motors, drivers\n"
+        "   - Compressors, pumps, motors, drivers — read labels carefully, distinguishing 0 from O/C and 1 from I\n"
         "   - Vessels, drums, tanks\n"
         "   - Heat exchangers, coolers\n"
         "   - Skid boundaries and panel boundaries (dashed box labels)\n\n"
         "4. PIPE SPECIFICATIONS: List any pipe spec labels visible (e.g. 0.5-089-7, 1.0-089-7, 2.0-256-216C)\n\n"
         "5. PROCESS STREAMS: Named streams, supply lines, vent lines, drain lines\n\n"
         "6. NOTES/SAFETY: Any general notes, safety annotations, or legend content\n\n"
-        "7. UNIQUE ELEMENTS: Anything distinctive about this diagram\n\n"
+        "7. UNIQUE ELEMENTS: Only note elements that have specific engineering significance: "
+        "unusual equipment configurations, non-standard connections, safety-critical markings, "
+        "vendor-specific assemblies, or process features that distinguish this diagram from a typical one of its type. "
+        "Do NOT note generic observations like 'diagram has a title block' or 'boundary boxes are present'.\n\n"
         "DO NOT list instrument tags here — those are handled separately.\n"
         "If you cannot read something clearly, omit it rather than guessing.\n"
     )
@@ -80,11 +105,19 @@ class MetadataExtractor:
         "Some may be duplicates, some may be misread, and some may be fabricated by the AI.\n\n"
         "Your job:\n"
         "1. Deduplicate — merge identical tags\n"
-        "2. Correct obvious misreads — e.g. if you see both PDI-1610 and POI-1610, keep PDI-1610\n"
-        "3. Remove any tags whose prefix is not a valid ISA function letter combination\n"
-        "4. Remove any tags that look like they came from a title block "
-        "(drawing numbers, dates, contract numbers, P.O. numbers tend to be 7+ digits or contain slashes)\n"
-        "5. Flag any tag you are uncertain about with a ? suffix\n\n"
+        "2. Correct obvious character misreads using these rules:\n"
+        "   - In tag PREFIXES: the letter I (capital i) is almost always an ISA function letter, not the digit 1\n"
+        "     e.g. PD1-1610 should be corrected to PDI-1610\n"
+        "   - In tag PREFIXES: the digit 0 (zero) should not appear — if you see it, "
+        "check whether it is a misread O or whether the whole prefix is invalid\n"
+        "   - In tag NUMBERS (after the hyphen): digits only are expected; letters I and O "
+        "should be corrected to 1 and 0 respectively if they appear in the number portion\n"
+        "3. Where both PDI-XXXX and PDIT-XXXX appear with the same loop number, keep BOTH — "
+        "they are two separate instruments in the same loop\n"
+        "4. Remove any tags whose prefix is not a valid ISA function letter combination\n"
+        "5. Remove any tags that look like drawing numbers, dates, P.O. numbers, or contract numbers "
+        "(7+ digit numbers, numbers containing slashes, numbers starting with year patterns like 19xx or 20xx)\n"
+        "6. Flag any tag you remain uncertain about with a ? suffix\n\n"
         "RAW TAG LIST:\n"
         "{raw_tags}\n\n"
         "Return ONLY a clean deduplicated list, one tag per line. No commentary.\n"
@@ -345,17 +378,29 @@ class MetadataExtractor:
         return {k: v for k, v in meta.items() if v}
 
     def _find_project_number(self, filename: str, text: str) -> str:
-        patterns = [
-            r"\bPRJ[-_]?\d{2,6}\b",
-            r"\bP[-_]?\d{4,6}\b",
-            r"\b\d{4,6}[-_][A-Z]{2,4}\b",
-            r"Project\s*(?:No|Number|#)[.:\s]*([A-Z0-9\-]{4,12})",
-        ]
         combined = filename + " " + text
-        for pat in patterns:
+
+        explicit_patterns = [
+            r"Project\s*(?:No|Number|#|Num)[.:\s]+([A-Z0-9\-]{3,12})",
+            r"\bPRJ[-_]?\d{2,6}\b",
+            r"\bJOB[-_]?\d{2,6}\b",
+        ]
+        for pat in explicit_patterns:
             m = re.search(pat, combined, re.IGNORECASE)
             if m:
-                return m.group(0).strip()
+                g = m.lastindex
+                return (m.group(g) if g else m.group(0)).strip()
+
+        noise_patterns = [
+            r"(?:Drawing|Dwg|Doc(?:ument)?)\s*(?:No|Number|#)[.:\s]+",
+            r"(?:W\.O\.|Work\s*Order)[.:\s]+",
+            r"(?:P\.O\.|Purchase\s*Order)[.:\s]+",
+            r"CONTRACT\s*NO[.:\s]+",
+        ]
+        for pat in noise_patterns:
+            if re.search(pat, combined, re.IGNORECASE):
+                return ""
+
         return ""
 
     def _find_revision(self, filename: str, text: str) -> str:

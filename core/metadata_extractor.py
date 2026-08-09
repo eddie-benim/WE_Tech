@@ -123,6 +123,41 @@ class MetadataExtractor:
         "Return ONLY a clean deduplicated list, one tag per line. No commentary.\n"
     )
 
+    DETAIL_ZOOM_PROMPT = (
+        "You are an engineering drawing specialist examining a HIGH-ZOOM CROP of a P&ID or system diagram.\n\n"
+        "This crop has been taken from a region containing SMALL DETAILS such as:\n"
+        "- Valve symbols (check valves, ball valves, gate valves, needle valves, globe valves, butterfly valves)\n"
+        "- Pipe specification labels (e.g. 0.5-DB9-7, 1.0-089-7, 2.0-256-216C)\n"
+        "- Small reference numbers near valves or fittings (BOM numbers, item numbers)\n"
+        "- Drain symbols, vent symbols, spectacle blinds, line breaks\n\n"
+        "CHARACTER AMBIGUITY — read with extreme care:\n"
+        "- B vs 8: look at curve symmetry — B has two bumps, 8 has two loops\n"
+        "- D vs 0 vs O: D has a flat left edge, 0/O are oval\n"
+        "- 1 vs l vs I: context-dependent — in pipe specs, digits are expected\n"
+        "- 5 vs S: 5 has a flat top, S is curved both ends\n"
+        "- 6 vs G: 6 has a closed bottom loop, G has an open right side\n"
+        "- 9 vs q: 9 has a closed top loop\n"
+        "When in doubt about a character in a PIPE SPEC, write the character as you see it literally — "
+        "do not substitute. If you read B, write B. If you read 8, write 8.\n\n"
+        "STRICT RULES:\n"
+        "- Read pipe spec strings EXACTLY as written character by character\n"
+        "- Do NOT correct or normalise pipe specs — accuracy of every character is critical\n"
+        "- List every valve symbol visible with its type and any tag or number adjacent to it\n"
+        "- List any small numbers near valve symbols — these may be BOM/item numbers; "
+        "note them as REFERENCE NUMBER: <value> and state that further context (e.g. a BOM document "
+        "for this project) is needed to confirm their meaning\n"
+        "- Note drain symbols, vent symbols, and line end indicators\n"
+        "- Do NOT read instrument bubble tags here — those are handled separately\n\n"
+        "OUTPUT FORMAT:\n"
+        "PIPE SPECS FOUND:\n"
+        "- <exact string as written>\n\n"
+        "VALVES / FITTINGS:\n"
+        "- Type: <check valve / ball valve / gate valve / globe valve / needle valve / butterfly valve / drain / vent / spectacle blind / unknown>, "
+        "Line: <pipe spec it is on if determinable>, Tag: <if labelled>, Reference number: <adjacent number if present — note BOM context needed>\n\n"
+        "DRAINS / VENTS:\n"
+        "- <description and location>\n"
+    )
+
     def extract_text_sample(self, path: Path, max_chars: int = 2000) -> str:
         ext = path.suffix.lower()
         try:
@@ -190,11 +225,25 @@ class MetadataExtractor:
         validated_tags = self._validate_tags_local(all_raw_tags)
         reconciled_tags = self._reconcile_tags(validated_tags, api_key)
 
+        detail_results = []
+        detail_tiles = self._make_detail_zoom_tiles(pil_image, cols=6, rows=4)
+        sampled = detail_tiles[::2] if len(detail_tiles) > 12 else detail_tiles
+        for tile in sampled:
+            tile_b64 = self._pil_to_b64(tile)
+            result = self._call_vision(tile_b64, mime, self.DETAIL_ZOOM_PROMPT, api_key, max_tokens=500)
+            if result.strip() and "nothing" not in result.lower()[:40]:
+                detail_results.append(result)
+
+        detail_section = ""
+        if detail_results:
+            detail_section = "\n\n=== DETAIL ZOOM (valves, pipe specs, BOM numbers) ===\n" + "\n---\n".join(detail_results)
+
         description = (
             f"=== CONTEXT ANALYSIS ===\n{context_text}\n\n"
             f"=== INSTRUMENT TAGS (multi-tile extraction) ===\n"
-            + "\n".join(reconciled_tags) +
-            f"\n\n=== RAW TILE OUTPUTS ===\n" + "\n\n".join(tile_texts)
+            + "\n".join(reconciled_tags)
+            + detail_section
+            + f"\n\n=== RAW TILE OUTPUTS ===\n" + "\n\n".join(tile_texts)
         )
 
         return description
@@ -213,6 +262,26 @@ class MetadataExtractor:
                 y0 = max(0, row * tile_h - overlap_y)
                 x1 = min(w, (col + 1) * tile_w + overlap_x)
                 y1 = min(h, (row + 1) * tile_h + overlap_y)
+                tiles.append(image.crop((x0, y0, x1, y1)))
+        return tiles
+
+    def _make_detail_zoom_tiles(self, image, cols: int = 6, rows: int = 4):
+        from PIL import Image
+        w, h = image.size
+        tile_w = int(w / cols)
+        tile_h = int(h / rows)
+        overlap_x = int(tile_w * 0.2)
+        overlap_y = int(tile_h * 0.2)
+        diagram_h = int(h * 0.85)
+        tiles = []
+        for row in range(rows):
+            for col in range(cols):
+                x0 = max(0, col * tile_w - overlap_x)
+                y0 = max(0, row * tile_h - overlap_y)
+                x1 = min(w, (col + 1) * tile_w + overlap_x)
+                y1 = min(diagram_h, (row + 1) * tile_h + overlap_y)
+                if y0 >= diagram_h:
+                    continue
                 tiles.append(image.crop((x0, y0, x1, y1)))
         return tiles
 

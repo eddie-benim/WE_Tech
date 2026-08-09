@@ -127,7 +127,7 @@ class FileAgent(BaseAgent):
                     from agents.specialist_agents import SpecialistCoordinator
                     coord = SpecialistCoordinator(model=self.model)
                     doc_type_guess = rule_result.get("doc_type", "Unknown")
-                    spec_output = coord.run(doc_type_guess, vision_description)
+                    spec_output = coord.run(doc_type_guess, vision_description, file_metadata=rule_result.get("metadata", {}))
                     specialist_results = spec_output.get("specialist_results", {})
                     for log_line in spec_output.get("log", []):
                         self._log(f"  [specialist] {log_line}")

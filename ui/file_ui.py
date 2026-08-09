@@ -127,13 +127,14 @@ def _render_file_card(r: dict):
         specialist = meta.get("specialist_analysis", {})
 
         SPECIALIST_SECTIONS = [
-            ("fluid_tracing",    "🔵 Process fluid tracing"),
-            ("pressure_ratings", "🔴 Pressure & design conditions"),
-            ("sis_safety",       "⚠️ Safety systems (SIS / ESD / alarms)"),
-            ("control_valves",   "🎛️ Control valves & loops"),
-            ("line_list",        "📋 Line list"),
-            ("engineering_data", "🔧 Engineering data (piping, valves, stamps)"),
-            ("utility_battery",  "🔌 Utility connections & battery limits"),
+            ("project_identification", "🏷️ Project identification"),
+            ("fluid_tracing",          "🔵 Process fluid tracing"),
+            ("pressure_ratings",       "🔴 Pressure & design conditions"),
+            ("sis_safety",             "⚠️ Safety systems (SIS / ESD / alarms)"),
+            ("control_valves",         "🎛️ Control valves & loops"),
+            ("line_list",              "📋 Line list"),
+            ("engineering_data",       "🔧 Engineering data (piping, valves, stamps)"),
+            ("utility_battery",        "🔌 Utility connections & battery limits"),
         ]
 
         for key, label in SPECIALIST_SECTIONS:

@@ -11,6 +11,7 @@ from prompts.specialist_prompts import (
     UTILITY_BATTERY_SYSTEM, UTILITY_BATTERY_USER,
     LINE_LIST_SYSTEM, LINE_LIST_USER,
     COORDINATOR_SYSTEM, COORDINATOR_USER,
+    PROJECT_ID_SYSTEM, PROJECT_ID_USER,
 )
 
 SPECIALIST_CONFIG = {
@@ -36,7 +37,7 @@ DISPATCH_KEY_MAP = {
 
 class SpecialistCoordinator(BaseAgent):
 
-    def run(self, doc_type: str, vision_text: str) -> dict:
+    def run(self, doc_type: str, vision_text: str, file_metadata: dict | None = None) -> dict:
         self.log = []
 
         if not vision_text or len(vision_text.strip()) < 100:
@@ -72,7 +73,51 @@ class SpecialistCoordinator(BaseAgent):
             except Exception as e:
                 self._log(f"  {result_key} failed: {e}")
 
+        self._log("Running project identification…")
+        try:
+            project_id = self._run_project_id(vision_text, file_metadata or {})
+            if project_id.strip():
+                results["project_identification"] = project_id
+                self._log("Project identification complete.")
+        except Exception as e:
+            self._log(f"Project identification failed: {e}")
+
         return {"specialist_results": results, "dispatch": dispatch, "log": self.log}
+
+    def _run_project_id(self, vision_text: str, file_metadata: dict) -> str:
+        import config
+        from tools.file_tools import list_reference_files
+
+        meta_summary = (
+            f"Drawing title: {file_metadata.get('description', 'unknown')}
+"
+            f"Client mentioned: {file_metadata.get('client', 'unknown')}
+"
+            f"Revision: {file_metadata.get('revision', 'unknown')}
+"
+            f"Current project_number field: {file_metadata.get('project_number', 'not set')}
+"
+            f"Vision context excerpt: {vision_text[:600]}"
+        )
+
+        ref_files = list_reference_files()
+        if ref_files:
+            db_summary = "
+".join(
+                f"- {f['name']} (ext: {f['extension']})"
+                for f in ref_files[:20]
+            )
+        else:
+            db_summary = "No other files currently in the database."
+
+        return self._chat(
+            system=PROJECT_ID_SYSTEM,
+            user=PROJECT_ID_USER.format(
+                metadata_summary=meta_summary,
+                db_files_summary=db_summary,
+            ),
+            max_tokens=400,
+        )
 
     def _decide_dispatch(self, doc_type: str, vision_text: str) -> dict:
         excerpt = vision_text[:1000]

@@ -450,25 +450,17 @@ class MetadataExtractor:
         combined = filename + " " + text
 
         explicit_patterns = [
-            r"Project\s*(?:No|Number|#|Num)[.:\s]+([A-Z0-9\-]{3,12})",
-            r"\bPRJ[-_]?\d{2,6}\b",
-            r"\bJOB[-_]?\d{2,6}\b",
+            (r"Project\s*(?:No|Number|#|Num)[.:\s]+([A-Z]{2,4}[-_]?\d{2,6})", 1),
+            (r"\b(PRJ[-_]?\d{2,6})\b", 1),
+            (r"\b(JOB[-_]?\d{2,6})\b", 1),
         ]
-        for pat in explicit_patterns:
+        for pat, group in explicit_patterns:
             m = re.search(pat, combined, re.IGNORECASE)
             if m:
-                g = m.lastindex
-                return (m.group(g) if g else m.group(0)).strip()
-
-        noise_patterns = [
-            r"(?:Drawing|Dwg|Doc(?:ument)?)\s*(?:No|Number|#)[.:\s]+",
-            r"(?:W\.O\.|Work\s*Order)[.:\s]+",
-            r"(?:P\.O\.|Purchase\s*Order)[.:\s]+",
-            r"CONTRACT\s*NO[.:\s]+",
-        ]
-        for pat in noise_patterns:
-            if re.search(pat, combined, re.IGNORECASE):
-                return ""
+                candidate = m.group(group).strip()
+                if re.match(r"^\d{7,}$", candidate):
+                    continue
+                return candidate
 
         return ""
 

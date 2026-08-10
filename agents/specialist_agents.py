@@ -27,7 +27,7 @@ SPECIALIST_CONFIG = {
 DISPATCH_KEY_MAP = {
     "run_fluid_tracing":   "fluid_tracing",
     "run_pressure_rating": "pressure_ratings",
-    "run_engineering_data":"engineering_data",
+    "run_engineering_data": "engineering_data",
     "run_sis_safety":      "sis_safety",
     "run_control_valve":   "control_valves",
     "run_utility_battery": "utility_battery",
@@ -85,28 +85,21 @@ class SpecialistCoordinator(BaseAgent):
         return {"specialist_results": results, "dispatch": dispatch, "log": self.log}
 
     def _run_project_id(self, vision_text: str, file_metadata: dict) -> str:
-        import config
         from tools.file_tools import list_reference_files
 
-        meta_summary = (
-            f"Drawing title: {file_metadata.get('description', 'unknown')}
-"
-            f"Client mentioned: {file_metadata.get('client', 'unknown')}
-"
-            f"Revision: {file_metadata.get('revision', 'unknown')}
-"
-            f"Current project_number field: {file_metadata.get('project_number', 'not set')}
-"
-            f"Vision context excerpt: {vision_text[:600]}"
-        )
+        meta_lines = [
+            "Drawing title: " + str(file_metadata.get("description", "unknown")),
+            "Client mentioned: " + str(file_metadata.get("client", "unknown")),
+            "Revision: " + str(file_metadata.get("revision", "unknown")),
+            "Current project_number field: " + str(file_metadata.get("project_number", "not set")),
+            "Vision context excerpt: " + vision_text[:600],
+        ]
+        meta_summary = "\n".join(meta_lines)
 
         ref_files = list_reference_files()
         if ref_files:
-            db_summary = "
-".join(
-                f"- {f['name']} (ext: {f['extension']})"
-                for f in ref_files[:20]
-            )
+            db_lines = ["- " + f["name"] + " (ext: " + f["extension"] + ")" for f in ref_files[:20]]
+            db_summary = "\n".join(db_lines)
         else:
             db_summary = "No other files currently in the database."
 

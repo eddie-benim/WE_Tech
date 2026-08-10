@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import json
@@ -34,7 +35,7 @@ class FileAgent(BaseAgent):
 
         reference_files = list_reference_files()
         naming_scheme = self._infer_naming_scheme(reference_files)
-        self._log(f"Naming scheme inferred: {naming_scheme.get('scheme', '—')}")
+        self._log(f"Naming scheme inferred: {naming_scheme.get('scheme', '--')}")
 
         try:
             from core.vector_store import VectorStore
@@ -93,7 +94,7 @@ class FileAgent(BaseAgent):
                     self._log(f"  Could not store metadata: {e}")
 
             results.append(result)
-            self._log(f"  → {result.get('doc_type', 'Unknown')} | {result.get('suggested_name', path.name)}")
+            self._log(f"  -> {result.get('doc_type', 'Unknown')} | {result.get('suggested_name', path.name)}")
 
         self._log("Analysis complete.")
         return results
@@ -111,7 +112,7 @@ class FileAgent(BaseAgent):
         specialist_results = {}
         is_visual = ext in IMAGE_EXTENSIONS or ext in PDF_AS_IMAGE_EXTENSIONS
         if is_visual:
-            self._log(f"  Running vision analysis on {path.name}…")
+            self._log(f"  Running vision analysis on {path.name}...")
             try:
                 api_key = os.environ.get("OPENAI_API_KEY") or config.OPENAI_API_KEY
                 vision_description = self._extractor.extract_vision_description(path, api_key=api_key)
@@ -214,7 +215,7 @@ class FileAgent(BaseAgent):
         rule_based = propose_naming_scheme(reference_files)
 
         if len(reference_files) >= 5:
-            self._log("Enough reference files found — asking model to refine naming scheme.")
+            self._log("Enough reference files found -- asking model to refine naming scheme.")
             ai_scheme = self._chat_json(
                 system=FILE_SYSTEM_PROMPT,
                 user=build_naming_scheme_prompt(reference_files),

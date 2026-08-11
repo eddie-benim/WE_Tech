@@ -124,40 +124,65 @@ class MetadataExtractor:
         "Return ONLY a clean deduplicated list, one tag per line. No commentary.\n"
     )
 
-    DETAIL_ZOOM_PROMPT = (
-        "You are an engineering drawing specialist examining a HIGH-ZOOM CROP of a P&ID or system diagram.\n\n"
-        "This crop has been taken from a region containing SMALL DETAILS such as:\n"
-        "- Valve symbols (check valves, ball valves, gate valves, needle valves, globe valves, butterfly valves)\n"
-        "- Pipe specification labels (e.g. 0.5-DB9-7, 1.0-089-7, 2.0-256-216C)\n"
-        "- Small reference numbers near valves or fittings (BOM numbers, item numbers)\n"
-        "- Drain symbols, vent symbols, spectacle blinds, line breaks\n\n"
-        "CHARACTER AMBIGUITY -- read with extreme care:\n"
-        "- B vs 8: look at curve symmetry -- B has two bumps, 8 has two loops\n"
-        "- D vs 0 vs O: D has a flat left edge, 0/O are oval\n"
-        "- 1 vs l vs I: context-dependent -- in pipe specs, digits are expected\n"
-        "- 5 vs S: 5 has a flat top, S is curved both ends\n"
-        "- 6 vs G: 6 has a closed bottom loop, G has an open right side\n"
-        "- 9 vs q: 9 has a closed top loop\n"
-        "When in doubt about a character in a PIPE SPEC, write the character as you see it literally -- "
-        "do not substitute. If you read B, write B. If you read 8, write 8.\n\n"
-        "STRICT RULES:\n"
-        "- Read pipe spec strings EXACTLY as written character by character\n"
-        "- Do NOT correct or normalise pipe specs -- accuracy of every character is critical\n"
-        "- List every valve symbol visible with its type and any tag or number adjacent to it\n"
-        "- List any small numbers near valve symbols -- these may be BOM/item numbers; "
-        "note them as REFERENCE NUMBER: <value> and state that further context (e.g. a BOM document "
-        "for this project) is needed to confirm their meaning\n"
-        "- Note drain symbols, vent symbols, and line end indicators\n"
-        "- Do NOT read instrument bubble tags here -- those are handled separately\n\n"
-        "OUTPUT FORMAT:\n"
-        "PIPE SPECS FOUND:\n"
-        "- <exact string as written>\n\n"
-        "VALVES / FITTINGS:\n"
-        "- Type: <check valve / ball valve / gate valve / globe valve / needle valve / butterfly valve / drain / vent / spectacle blind / unknown>, "
-        "Line: <pipe spec it is on if determinable>, Tag: <if labelled>, Reference number: <adjacent number if present -- note BOM context needed>\n\n"
-        "DRAINS / VENTS:\n"
-        "- <description and location>\n"
+    PIPE_SPEC_PROMPT = (
+        "You are reading a NARROW HORIZONTAL STRIP of a P&ID engineering drawing.\n\n"
+        "YOUR ONLY JOB: Find and list every pipe specification label visible in this strip.\n"
+        "Pipe specs appear as text inside rectangular boxes on or adjacent to pipe lines.\n"
+        "They follow patterns like: SIZE-CLASS-SUFFIX (e.g. 0.5-DB9-7, 1.0-DB9-7, 2.0-256-216C, 1.0-356-416C)\n\n"
+        "CHARACTER AMBIGUITY -- this is critical for pipe specs:\n"
+        "- The letter B (uppercase B) and the digit 8 are commonly confused. "
+        "Look at the character carefully: B has two bumps on the right side, 8 has two symmetric loops.\n"
+        "- D and 0: D has a flat left vertical stroke, 0 is a closed oval.\n"
+        "- Read EVERY character literally as you see it. Do NOT substitute or correct.\n"
+        "- If a spec reads 0.5-DB9-7, write 0.5-DB9-7. Do not write 0.5-089-7.\n"
+        "- If a spec reads 0.5-089-7, write 0.5-089-7. Do not write 0.5-DB9-7.\n\n"
+        "There is also a NOTE BOX typically in the lower left area that says:\n"
+        "  [pipe spec] TYP. FOR INSTRUMENTATION AND REFERENCE SIGNAL LINES\n"
+        "Read that spec carefully -- it defines the typical spec for instrument lines.\n\n"
+        "OUTPUT: one pipe spec per line, nothing else.\n"
+        "Example:\n"
+        "0.5-DB9-7\n"
+        "1.0-DB9-7\n"
+        "2.0-256-216C\n"
     )
+
+    VALVE_SURVEY_PROMPT = (
+        "You are an engineering drawing specialist examining a CROP of a P&ID.\n\n"
+        "YOUR ONLY JOB: Catalogue every valve, fitting, and piping specialty item visible.\n\n"
+        "VALVE SYMBOL GUIDE for P&IDs:\n"
+        "- Check valve: bow-tie or arrowhead symbol on a line (allows flow one direction only)\n"
+        "- Ball valve: filled solid square or circle on a line (quarter-turn isolation)\n"
+        "- Gate valve: filled solid triangle pointing at line (on/off isolation)\n"
+        "- Globe valve: circle with a line through it, or bowtie with circle (control/throttling)\n"
+        "- Needle valve: small triangle or X symbol (fine flow control, instrumentation)\n"
+        "- Control valve: globe/rotary body with actuator on top (diaphragm dome = pneumatic)\n"
+        "- Solenoid valve: square symbol with S inside or coil symbol\n"
+        "- Rupture disc / PSE: parallel lines or rectangular block across a line (bursting disc)\n"
+        "- Orifice plate / restriction: double vertical lines across a pipe (flow restriction)\n"
+        "- Filter element: diamond shape (FL- tagged)\n"
+        "- Strainer: Y-shape or basket symbol\n"
+        "- Spectacle blind: figure-8 symbol\n"
+        "- Drain: small line with arrow pointing down\n"
+        "- Vent: small line with arrow pointing up\n\n"
+        "RULES:\n"
+        "- List EVERY fitting visible regardless of size\n"
+        "- For each item: identify its type, the pipe spec label on the line it is on, "
+        "any tag (e.g. FCV-1611, FL-1610A), and any adjacent reference number\n"
+        "- Reference numbers are small numbers (2-4 digits) near fittings -- "
+        "note them as BOM reference numbers; state that a project BOM is needed to confirm meaning\n"
+        "- Do NOT read instrument bubble tags (circles with text inside) -- focus only on fittings\n"
+        "- If you cannot determine valve type, write UNKNOWN\n"
+        "- A dashed rectangle around a group of fittings indicates a typical/repeated assembly\n\n"
+        "OUTPUT FORMAT -- one item per line:\n"
+        "- <valve/fitting type> | Line: <pipe spec> | Tag: <if present> | Ref#: <BOM number if present>\n"
+        "Example:\n"
+        "- Check valve | Line: 0.5-DB9-7 | Tag: none | Ref#: 231 (BOM ref -- project BOM needed)\n"
+        "- Ball valve | Line: 0.5-DB9-7 | Tag: none | Ref#: 233 (BOM ref -- project BOM needed)\n"
+        "- Rupture disc | Line: 2.0-356-416C | Tag: none | Ref#: 401 (BOM ref -- project BOM needed)\n"
+        "- Orifice plate | Line: 0.5-DB9-7 | Tag: none | Ref#: 259\n"
+    )
+
+    DETAIL_ZOOM_PROMPT = PIPE_SPEC_PROMPT
 
     def extract_text_sample(self, path: Path, max_chars: int = 2000) -> str:
         ext = path.suffix.lower()
@@ -197,54 +222,67 @@ class MetadataExtractor:
         return self._multi_pass_analysis(pil_image, mime, api_key)
 
     def _multi_pass_analysis(self, pil_image, mime: str, api_key: str) -> str:
-        from PIL import Image
-
         width, height = pil_image.size
 
+        # --- Pass 1: Context (full image, layout / title block / equipment) ---
         context_b64 = self._pil_to_b64(pil_image)
         context_text = self._call_vision(context_b64, mime, self.CONTEXT_PROMPT, api_key, max_tokens=1200)
 
-        tiles = self._make_tiles(pil_image, cols=3, rows=2, overlap_frac=0.12)
-
+        # --- Pass 2a: Instrument tags, 3x2 coarse grid ---
         all_raw_tags = []
         tile_texts = []
-        for i, tile in enumerate(tiles):
+        for i, tile in enumerate(self._make_tiles(pil_image, cols=3, rows=2, overlap_frac=0.12)):
             tile_b64 = self._pil_to_b64(tile)
-            tile_result = self._call_vision(tile_b64, mime, self.TILE_INSTRUMENT_PROMPT, api_key, max_tokens=600)
-            tile_texts.append(f"[Tile {i+1}]\n{tile_result}")
-            tags = self._parse_tag_list(tile_result)
-            all_raw_tags.extend(tags)
+            result = self._call_vision(tile_b64, mime, self.TILE_INSTRUMENT_PROMPT, api_key, max_tokens=600)
+            tile_texts.append(f"[Tile {i+1}]\n{result}")
+            all_raw_tags.extend(self._parse_tag_list(result))
 
+        # --- Pass 2b: Instrument tags, 5x3 fine grid for large drawings ---
         if width > 3000 or height > 2000:
-            detail_tiles = self._make_tiles(pil_image, cols=5, rows=3, overlap_frac=0.15)
-            for i, tile in enumerate(detail_tiles):
+            for tile in self._make_tiles(pil_image, cols=5, rows=3, overlap_frac=0.15):
                 tile_b64 = self._pil_to_b64(tile)
-                tile_result = self._call_vision(tile_b64, mime, self.TILE_INSTRUMENT_PROMPT, api_key, max_tokens=600)
-                tags = self._parse_tag_list(tile_result)
-                all_raw_tags.extend(tags)
+                result = self._call_vision(tile_b64, mime, self.TILE_INSTRUMENT_PROMPT, api_key, max_tokens=600)
+                all_raw_tags.extend(self._parse_tag_list(result))
 
-        validated_tags = self._validate_tags_local(all_raw_tags)
-        reconciled_tags = self._reconcile_tags(validated_tags, api_key)
+        reconciled_tags = self._reconcile_tags(self._validate_tags_local(all_raw_tags), api_key)
 
-        detail_results = []
-        detail_tiles = self._make_detail_zoom_tiles(pil_image, cols=6, rows=4)
-        sampled = detail_tiles[::2] if len(detail_tiles) > 12 else detail_tiles
-        for tile in sampled:
+        # --- Pass 3: Pipe spec reading -- horizontal strips across diagram body ---
+        pipe_spec_results = []
+        diagram_body = pil_image.crop((0, int(height * 0.05), width, int(height * 0.82)))
+        for tile in self._make_tiles(diagram_body, cols=8, rows=1, overlap_frac=0.1):
             tile_b64 = self._pil_to_b64(tile)
-            result = self._call_vision(tile_b64, mime, self.DETAIL_ZOOM_PROMPT, api_key, max_tokens=500)
-            if result.strip() and "nothing" not in result.lower()[:40]:
-                detail_results.append(result)
+            result = self._call_vision(tile_b64, mime, self.PIPE_SPEC_PROMPT, api_key, max_tokens=300)
+            if result.strip():
+                pipe_spec_results.append(result.strip())
 
-        detail_section = ""
-        if detail_results:
-            detail_section = "\n\n=== DETAIL ZOOM (valves, pipe specs, BOM numbers) ===\n" + "\n---\n".join(detail_results)
+        pipe_specs_unique = []
+        seen_specs = set()
+        for block in pipe_spec_results:
+            for line in block.splitlines():
+                spec = line.strip().strip("-").strip()
+                if spec and spec not in seen_specs:
+                    seen_specs.add(spec)
+                    pipe_specs_unique.append(spec)
+
+        pipe_spec_section = "\n=== PIPE SPECIFICATIONS (dedicated pass) ===\n" + "\n".join(pipe_specs_unique)
+
+        # --- Pass 4: Valve survey -- full diagram in 4x3 grid, every tile ---
+        valve_results = []
+        for tile in self._make_tiles(diagram_body, cols=4, rows=3, overlap_frac=0.15):
+            tile_b64 = self._pil_to_b64(tile)
+            result = self._call_vision(tile_b64, mime, self.VALVE_SURVEY_PROMPT, api_key, max_tokens=700)
+            if result.strip() and len(result.strip()) > 20:
+                valve_results.append(result.strip())
+
+        valve_section = "\n\n=== VALVE AND FITTING SURVEY ===\n" + "\n---\n".join(valve_results)
 
         description = (
-            f"=== CONTEXT ANALYSIS ===\n{context_text}\n\n"
-            f"=== INSTRUMENT TAGS (multi-tile extraction) ===\n"
+            "=== CONTEXT ANALYSIS ===\n" + context_text + "\n\n"
+            "=== INSTRUMENT TAGS (multi-tile extraction) ===\n"
             + "\n".join(reconciled_tags)
-            + detail_section
-            + f"\n\n=== RAW TILE OUTPUTS ===\n" + "\n\n".join(tile_texts)
+            + pipe_spec_section
+            + valve_section
+            + "\n\n=== RAW TILE OUTPUTS ===\n" + "\n\n".join(tile_texts)
         )
 
         return description

@@ -54,15 +54,17 @@ class FileAgent(BaseAgent):
             except Exception as e:
                 self._log(f"  Full AI analysis failed: {e}")
                 self._log(f"  Attempting standalone vision before falling back...")
+                result = self._classifier.classify(path)
                 ext = path.suffix.lower()
                 if ext in IMAGE_EXTENSIONS or ext in PDF_AS_IMAGE_EXTENSIONS:
                     try:
                         api_key = os.environ.get("OPENAI_API_KEY") or config.OPENAI_API_KEY
-                        vision_description = self._extractor.extract_vision_description(path, api_key=api_key)
+                        vision_description = self._extractor.extract_vision_description(
+                            path, api_key=api_key, doc_type_hint=result.get("doc_type", "")
+                        )
                         self._log(f"  Standalone vision OK ({len(vision_description)} chars).")
                     except Exception as ve:
                         self._log(f"  Standalone vision also failed: {ve}")
-                result = self._classifier.classify(path)
                 result["original_path"] = str(path)
                 result["confidence"] = "low"
                 if vision_description:
@@ -115,7 +117,9 @@ class FileAgent(BaseAgent):
             self._log(f"  Running vision analysis on {path.name}...")
             try:
                 api_key = os.environ.get("OPENAI_API_KEY") or config.OPENAI_API_KEY
-                vision_description = self._extractor.extract_vision_description(path, api_key=api_key)
+                vision_description = self._extractor.extract_vision_description(
+                    path, api_key=api_key, doc_type_hint=rule_result.get("doc_type", "")
+                )
                 if vision_description:
                     self._log(f"  Vision analysis complete ({len(vision_description)} chars).")
                 else:

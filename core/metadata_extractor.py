@@ -136,14 +136,71 @@ class MetadataExtractor:
         "- Read EVERY character literally as you see it. Do NOT substitute or correct.\n"
         "- If a spec reads 0.5-DB9-7, write 0.5-DB9-7. Do not write 0.5-089-7.\n"
         "- If a spec reads 0.5-089-7, write 0.5-089-7. Do not write 0.5-DB9-7.\n\n"
+        "UNCERTAINTY -- read this before answering:\n"
+        "- If a single character is genuinely unclear even after close inspection, mark that "
+        "exact character position with ? (e.g. 1.0-3?6-416C). Do NOT invent a complete, "
+        "clean-looking string for a label you cannot fully read -- a partial read with ? is "
+        "far more useful than a confident but wrong one.\n"
+        "- If two spec labels sit close together, read each one completely and independently "
+        "before moving to the next. Do not let digits from one label bleed into your reading "
+        "of an adjacent label -- this is a common error when labels are stacked or clustered.\n"
+        "- If you are not looking at a real spec label at all (e.g. it's a dimension, a BOM "
+        "reference number, or unreadable noise), do not report it as a pipe spec.\n\n"
         "There is also a NOTE BOX typically in the lower left area that says:\n"
         "  [pipe spec] TYP. FOR INSTRUMENTATION AND REFERENCE SIGNAL LINES\n"
-        "Read that spec carefully -- it defines the typical spec for instrument lines.\n\n"
+        "Read that spec carefully -- it defines the typical spec for instrument lines. "
+        "If you find this note box, prefix that one line with 'TYP:' (e.g. 'TYP: 0.5-DB9-7'). "
+        "All other specs get their own plain line, no prefix.\n\n"
         "OUTPUT: one pipe spec per line, nothing else.\n"
         "Example:\n"
-        "0.5-DB9-7\n"
+        "TYP: 0.5-DB9-7\n"
         "1.0-DB9-7\n"
         "2.0-256-216C\n"
+    )
+
+    PIPE_SPEC_DETAIL_ZOOM_PROMPT = (
+        "You are re-examining a SMALL, HIGH-MAGNIFICATION crop containing one or more pipe "
+        "specification labels that were flagged as uncertain or densely clustered on a first "
+        "pass.\n\n"
+        "RULES:\n"
+        "- Read each spec label completely and independently before moving to the next. Do "
+        "not let digits from one nearby label influence your reading of another -- this is "
+        "the most common error in dense clusters.\n"
+        "- Character ambiguity: B vs 8 (B has two flat-sided bumps, 8 has two symmetric "
+        "loops), D vs 0 (D has a flat left edge, 0 is a closed oval). Read exactly as drawn.\n"
+        "- If a character is genuinely illegible even at this magnification, mark that "
+        "position with ? -- do not guess a complete, clean-looking string.\n"
+        "- If what looked like one label on the first pass is actually two adjacent distinct "
+        "labels, report them as two separate lines.\n\n"
+        "OUTPUT: one pipe spec per line, nothing else. Use ? for any illegible character.\n"
+    )
+
+    PIPE_SPEC_RECONCILE_PROMPT = (
+        "You are a piping engineer reconciling pipe specification readings extracted from "
+        "multiple overlapping crops of the same P&ID.\n\n"
+        "Below is the RAW LIST of pipe spec strings as read, in the order encountered. The "
+        "same physical spec label may have been read more than once (from overlapping crops "
+        "or a follow-up zoom pass) with slightly different results due to vision noise. Some "
+        "entries may be hallucinated -- plausible-looking strings assembled from digits of two "
+        "adjacent real labels, or invented outright when a crop was blurry or ambiguous.\n\n"
+        "A confirmed reference spec (if the drawing's 'TYP. FOR INSTRUMENTATION' note box was "
+        "found) is provided separately -- treat it as correct and cross-check other entries "
+        "against it.\n\n"
+        "YOUR JOB:\n"
+        "1. Group near-identical strings that differ by 1-2 characters -- these are almost "
+        "always the same physical label read with minor noise. Pick the single most plausible "
+        "canonical reading per group: prefer whichever variant appears more than once, or "
+        "whichever matches the confirmed reference spec if related.\n"
+        "2. A spec string that appears only ONCE across all readings AND is not corroborated "
+        "by the reference spec AND looks structurally suspicious (e.g. its digits look like a "
+        "blend of two other specs in the list) is LOW CONFIDENCE. Do not silently keep or "
+        "silently discard it -- list it separately so a human can verify against the drawing.\n"
+        "3. Do not invent a spec that doesn't appear anywhere in the raw list.\n\n"
+        "REFERENCE NOTE SPEC (if any): {reference_spec}\n\n"
+        "RAW SPEC READINGS:\n{raw_specs}\n\n"
+        "OUTPUT FORMAT:\n"
+        "CONFIRMED SPECS:\n- <canonical spec string>\n\n"
+        "LOW CONFIDENCE (verify against drawing):\n- <spec string>: <one clause on why it's suspect>\n"
     )
 
     VALVE_SURVEY_PROMPT = (
@@ -211,6 +268,42 @@ class MetadataExtractor:
         "Ref#: <if present> | Why: <short clause>\n"
         "If, after this close look, you are still genuinely uncertain, write "
         "CANDIDATES: <type A> or <type B> instead of guessing a single type.\n"
+    )
+
+    VALVE_RECONCILE_PROMPT = (
+        "You are a piping engineer reconciling a valve/fitting survey assembled from multiple "
+        "overlapping crops of the same P&ID, plus the separately-extracted instrument tag list "
+        "from the same drawing.\n\n"
+        "CRITICAL RULE -- READ BEFORE ANYTHING ELSE:\n"
+        "An item identified by an explicit alphanumeric instrument tag (e.g. PSE-1682, "
+        "PDI-1610 -- letters followed by a hyphen and numbers) is a DIFFERENT PHYSICAL DEVICE "
+        "from an item identified only by a bare 2-4 digit BOM reference number (e.g. 401), "
+        "even if they are the same device TYPE (e.g. both rupture discs) and appear in the "
+        "same general area of the drawing. NEVER merge a tagged instrument with an untagged "
+        "BOM-ref fitting. If both appear in the source material, both must appear separately "
+        "in your output, each keeping its own identifier.\n\n"
+        "YOUR JOB:\n"
+        "1. Merge entries that are clearly the SAME physical item reported by more than one "
+        "overlapping tile or by the zoom-verification pass -- same BOM ref# or same tag, same "
+        "or compatible type and line. Keep one clean entry, preferring the zoom-verification "
+        "reading over the general survey reading when both exist for the same item.\n"
+        "2. Do NOT merge two entries just because they share a type and are near each other in "
+        "the text -- only merge when the ref#/tag matches, or the description makes clear it's "
+        "a repeated read of the identical item.\n"
+        "3. Preserve every distinct ref# and every distinct tag as its own entry. Do not drop "
+        "an item just because it's the only mention of that ref#.\n"
+        "4. If a ref# or tag appears with conflicting types across sources (e.g. 'check valve' "
+        "in one tile, 'gate valve' in another), do not silently pick one -- list it as "
+        "UNRESOLVED instead.\n\n"
+        "INSTRUMENT TAGS ON THIS DRAWING (for cross-reference only -- do not re-list these as "
+        "valve/fitting entries):\n{instrument_tags}\n\n"
+        "RAW VALVE/FITTING SURVEY (from multiple overlapping tiles, may include a "
+        "zoom-verification section):\n{raw_survey}\n\n"
+        "OUTPUT FORMAT -- one item per line:\n"
+        "- <valve/fitting type> | Line: <pipe spec if known> | Tag: <if present> | "
+        "Ref#: <if present>\n\n"
+        "UNRESOLVED (conflicting type across sources):\n"
+        "- Ref#/Tag: <value> | Candidates: <type A> or <type B>\n"
     )
 
     # --- Non-piping-diagram document passes (data sheets, isometrics/GA, matrices) ---
@@ -345,6 +438,68 @@ class MetadataExtractor:
         lower = tile_result.lower()
         return any(t in lower for t in ("unknown", "uncertain", "candidates:"))
 
+    def _is_dense_tile(self, tile_result: str, threshold: int = 4) -> bool:
+        """Dense tiles (many items packed into one crop) are exactly where LLM vision
+        undercounts and conflates nearby items -- e.g. missing a fitting when three others
+        sit close together, or blending two labels. This doesn't require the model to admit
+        uncertainty; it's just a property of how much the tile is reporting."""
+        if not tile_result:
+            return False
+        item_lines = [l for l in tile_result.splitlines() if l.strip().startswith("-")]
+        return len(item_lines) >= threshold
+
+    def _reconcile_pipe_specs(self, raw_specs: list[str], reference_spec: str, api_key: str) -> str:
+        if not raw_specs:
+            return "CONFIRMED SPECS:\n(none found)"
+        key = api_key or os.environ.get("OPENAI_API_KEY", "")
+        if not key:
+            seen = []
+            for s in raw_specs:
+                if s not in seen:
+                    seen.append(s)
+            return "CONFIRMED SPECS:\n" + "\n".join(f"- {s}" for s in seen)
+        from openai import OpenAI
+        client = OpenAI(api_key=key)
+        try:
+            response = client.chat.completions.create(
+                model="gpt-4o",
+                max_tokens=800,
+                messages=[{
+                    "role": "user",
+                    "content": self.PIPE_SPEC_RECONCILE_PROMPT.format(
+                        reference_spec=reference_spec or "none found",
+                        raw_specs="\n".join(raw_specs),
+                    ),
+                }],
+            )
+            return response.choices[0].message.content or ""
+        except Exception as e:
+            return "CONFIRMED SPECS:\n" + "\n".join(f"- {s}" for s in raw_specs) + f"\n\n[Reconciliation failed: {e}]"
+
+    def _reconcile_valve_survey(self, raw_blocks: list[str], instrument_tags: list[str], api_key: str) -> str:
+        if not raw_blocks:
+            return "(none found)"
+        key = api_key or os.environ.get("OPENAI_API_KEY", "")
+        if not key:
+            return "\n---\n".join(raw_blocks)
+        from openai import OpenAI
+        client = OpenAI(api_key=key)
+        try:
+            response = client.chat.completions.create(
+                model="gpt-4o",
+                max_tokens=1500,
+                messages=[{
+                    "role": "user",
+                    "content": self.VALVE_RECONCILE_PROMPT.format(
+                        instrument_tags="\n".join(instrument_tags) if instrument_tags else "none",
+                        raw_survey="\n---\n".join(raw_blocks),
+                    ),
+                }],
+            )
+            return response.choices[0].message.content or ""
+        except Exception as e:
+            return "\n---\n".join(raw_blocks) + f"\n\n[Reconciliation failed: {e}]"
+
     def _multi_pass_analysis(self, pil_image, mime: str, api_key: str, doc_type_hint: str = "") -> str:
         width, height = pil_image.size
         category = self._categorize_doc_type(doc_type_hint)
@@ -405,6 +560,7 @@ class MetadataExtractor:
 
         # --- Pass 3: Pipe spec reading -- horizontal strips across diagram body ---
         pipe_spec_results = []
+        pipe_spec_zoom_results = []
         diagram_body = pil_image.crop((0, int(height * 0.05), width, int(height * 0.82)))
         spec_cols = max(4, -(-diagram_body.size[0] // 1900))  # single-row strips: width-only
         for tile in self._make_tiles(diagram_body, cols=spec_cols, rows=1, overlap_frac=0.1):
@@ -413,16 +569,32 @@ class MetadataExtractor:
             if result.strip():
                 pipe_spec_results.append(result.strip())
 
-        pipe_specs_unique = []
-        seen_specs = set()
-        for block in pipe_spec_results:
+                # Targeted zoom: fires on an explicit '?' (model flagged a char as unclear)
+                # or a dense strip (many labels in one crop -- exactly where digits from
+                # adjacent labels bleed into each other, as with the 356/736/750 case).
+                if "?" in result or self._is_dense_tile(result, threshold=3):
+                    for sub in self._make_tiles(tile, cols=2, rows=1, overlap_frac=0.2):
+                        sub_b64 = self._pil_to_b64(sub)
+                        zoom_out = self._call_vision(
+                            sub_b64, mime, self.PIPE_SPEC_DETAIL_ZOOM_PROMPT, api_key, max_tokens=250
+                        )
+                        if zoom_out.strip():
+                            pipe_spec_zoom_results.append(zoom_out.strip())
+
+        raw_specs = []
+        reference_spec = ""
+        for block in pipe_spec_results + pipe_spec_zoom_results:
             for line in block.splitlines():
                 spec = line.strip().strip("-").strip()
-                if spec and spec not in seen_specs:
-                    seen_specs.add(spec)
-                    pipe_specs_unique.append(spec)
+                if not spec:
+                    continue
+                if spec.upper().startswith("TYP:"):
+                    reference_spec = spec.split(":", 1)[1].strip()
+                else:
+                    raw_specs.append(spec)
 
-        pipe_spec_section = "\n=== PIPE SPECIFICATIONS (dedicated pass) ===\n" + "\n".join(pipe_specs_unique)
+        reconciled_specs = self._reconcile_pipe_specs(raw_specs, reference_spec, api_key)
+        pipe_spec_section = "\n=== PIPE SPECIFICATIONS (reconciled across tiles) ===\n" + reconciled_specs
 
         # --- Pass 4: Valve survey -- adaptive grid over the diagram body, every tile ---
         valve_results = []
@@ -434,11 +606,13 @@ class MetadataExtractor:
             if result.strip() and len(result.strip()) > 20:
                 valve_results.append(result.strip())
 
-                # --- Pass 5 (targeted): only re-examine THIS tile at higher magnification
-                # if the first pass itself flagged ambiguity. This gets close-inspection
-                # accuracy on the handful of genuinely ambiguous symbols per drawing
-                # instead of paying for a blanket high-zoom pass over every tile. ---
-                if self._needs_zoom_verification(result):
+                # --- Pass 5 (targeted): re-examine THIS tile at higher magnification if the
+                # first pass flagged ambiguity OR the tile is dense. Density matters because
+                # a silent miss or conflation (e.g. dropping one item among several packed
+                # into one crop) never triggers a self-reported "unknown" -- it just doesn't
+                # show up. This is what catches misses in clustered areas like a Gas Seal
+                # Panel corner with several fittings and instruments close together. ---
+                if self._needs_zoom_verification(result) or self._is_dense_tile(result):
                     for sub in self._make_tiles(tile, cols=2, rows=2, overlap_frac=0.2):
                         sub_b64 = self._pil_to_b64(sub)
                         zoom_out = self._call_vision(
@@ -447,21 +621,18 @@ class MetadataExtractor:
                         if zoom_out.strip() and len(zoom_out.strip()) > 15:
                             zoom_results.append(zoom_out.strip())
 
-        valve_section = "\n\n=== VALVE AND FITTING SURVEY ===\n" + "\n---\n".join(valve_results)
-        zoom_section = ""
-        if zoom_results:
-            zoom_section = (
-                "\n\n=== VALVE DETAIL ZOOM (verification pass on flagged-ambiguous items -- "
-                "TAKES PRECEDENCE over the general survey above for the same item) ===\n"
-                + "\n---\n".join(zoom_results)
-            )
+        reconciled_valves = self._reconcile_valve_survey(
+            valve_results + ([f"[Zoom verification]\n{z}" for z in zoom_results] if zoom_results else []),
+            reconciled_tags,
+            api_key,
+        )
+        valve_section = "\n\n=== VALVE AND FITTING SURVEY (reconciled across tiles) ===\n" + reconciled_valves
 
         description += (
             "\n\n=== INSTRUMENT TAGS (multi-tile extraction) ===\n"
             + "\n".join(reconciled_tags)
             + pipe_spec_section
             + valve_section
-            + zoom_section
             + "\n\n=== RAW TILE OUTPUTS ===\n" + "\n\n".join(tile_texts)
         )
 

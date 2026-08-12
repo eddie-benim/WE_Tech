@@ -54,13 +54,13 @@ class FileAgent(BaseAgent):
             except Exception as e:
                 self._log(f"  Full AI analysis failed: {e}")
                 self._log(f"  Attempting standalone vision before falling back...")
-                result = self._classifier.classify(path)
                 ext = path.suffix.lower()
+                result = self._classifier.classify(path)
                 if ext in IMAGE_EXTENSIONS or ext in PDF_AS_IMAGE_EXTENSIONS:
                     try:
                         api_key = os.environ.get("OPENAI_API_KEY") or config.OPENAI_API_KEY
                         vision_description = self._extractor.extract_vision_description(
-                            path, api_key=api_key, doc_type_hint=result.get("doc_type", "")
+                            path, api_key=api_key, doc_type_hint=result.get("doc_type", "Unknown")
                         )
                         self._log(f"  Standalone vision OK ({len(vision_description)} chars).")
                     except Exception as ve:
@@ -118,7 +118,7 @@ class FileAgent(BaseAgent):
             try:
                 api_key = os.environ.get("OPENAI_API_KEY") or config.OPENAI_API_KEY
                 vision_description = self._extractor.extract_vision_description(
-                    path, api_key=api_key, doc_type_hint=rule_result.get("doc_type", "")
+                    path, api_key=api_key, doc_type_hint=rule_result.get("doc_type", "Unknown")
                 )
                 if vision_description:
                     self._log(f"  Vision analysis complete ({len(vision_description)} chars).")
@@ -139,7 +139,8 @@ class FileAgent(BaseAgent):
                 except Exception as e:
                     self._log(f"  Specialist analysis failed: {e}")
 
-        query_parts = [path.name, text_sample[:300], vision_description[:300]]
+        compact_vision = self._extractor.compact_vision_description(vision_description)
+        query_parts = [path.name, text_sample[:300], compact_vision[:300]]
         query = " ".join(p for p in query_parts if p)
         reference_context = get_reference_context(query, n_results=5)
 
@@ -150,7 +151,7 @@ class FileAgent(BaseAgent):
             rule_based_result=rule_result,
             naming_scheme=naming_scheme,
             reference_context=reference_context,
-            vision_description=vision_description,
+            vision_description=compact_vision,
         )
 
         ai_result = self._chat_json(

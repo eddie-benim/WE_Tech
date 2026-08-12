@@ -10,6 +10,17 @@ from pathlib import Path
 
 class MetadataExtractor:
 
+    # The first-pass tile target is deliberately a little larger than the old 1900 px
+    # setting. OpenAI high-detail vision downsamples large crops internally, so 1900 px
+    # caused many more requests without a proportional gain in effective model resolution.
+    # Hard/ambiguous areas are still re-cropped at higher magnification below.
+    BASE_TILE_TARGET = 2250
+
+    def __init__(self):
+        # In-memory cache prevents a late downstream failure from triggering the entire
+        # expensive vision pipeline a second time in FileAgent's fallback path.
+        self._vision_cache: dict[tuple[str, int, int, str], str] = {}
+
     VALID_ISA_PREFIXES = {
         "PI", "PDI", "PDIT", "PT", "PIT", "PG", "PCV", "PSV", "PSE", "PAH", "PAL",
         "PAHH", "PALL", "PIC", "PR", "PY", "PDT",
@@ -389,6 +400,15 @@ class MetadataExtractor:
     def extract_vision_description(self, path: Path, api_key: str = "", doc_type_hint: str = "") -> str:
         ext = path.suffix.lower()
         try:
+            stat = path.stat()
+            cache_key = (str(path.resolve()), stat.st_mtime_ns, stat.st_size, (doc_type_hint or "").strip())
+            cached = self._vision_cache.get(cache_key)
+            if cached is not None:
+                return cached
+        except Exception:
+            cache_key = None
+
+        try:
             if ext in (".png", ".jpg", ".jpeg"):
                 image_b64 = base64.b64encode(path.read_bytes()).decode("utf-8")
                 mime = "image/png" if ext == ".png" else "image/jpeg"
@@ -402,7 +422,10 @@ class MetadataExtractor:
         except Exception as e:
             return f"Image load failed: {e}"
 
-        return self._multi_pass_analysis(pil_image, mime, api_key, doc_type_hint=doc_type_hint)
+        result = self._multi_pass_analysis(pil_image, mime, api_key, doc_type_hint=doc_type_hint)
+        if cache_key is not None and result and not result.startswith("Image load failed"):
+            self._vision_cache[cache_key] = result
+        return result
 
     def _categorize_doc_type(self, doc_type_hint: str) -> str:
         """Which pass set applies. Unrecognised/Unknown types default to the full
@@ -417,17 +440,40 @@ class MetadataExtractor:
             return "tabular"
         return "diagram"
 
-    def _adaptive_grid(self, width: int, height: int, target_edge: int = 1900) -> tuple[int, int]:
-        """Compute a tile grid sized so each tile's base edge lands at/under target_edge px
-        -- OpenAI's vision encoder downsamples anything larger before it ever reaches the
-        model, so tiles bigger than this waste the resolution the rasteriser produced.
-        target_edge is set with headroom under the ~2048px internal cap; overlap padding
-        can push the largest interior tiles a few percent past that in practice. Fully
-        compensating for worst-case double-sided overlap would need ~40% more tiles for a
-        ~3-4% resolution gain on those tiles -- not worth it here, because the pass that
-        actually needs pixel-perfect resolution on hard cases (valve symbol typing) already
-        gets a dedicated, properly-sized re-crop via the zoom-verification pass below when a
-        tile is flagged ambiguous. This grid just needs to be good enough for the first pass."""
+    def _doc_type_from_context(self, context_text: str) -> str:
+        """Recover the model-read document type from the context pass when the
+        filename/rule classifier could not identify a scanned drawing beforehand."""
+        m = re.search(r"(?im)^\s*(?:\d+[.)]\s*)?(?:[-*]\s*)?\**DOCUMENT TYPE\**\s*:\s*([^\n]+)", context_text or "")
+        if not m:
+            return ""
+        value = m.group(1).strip().lower()
+        aliases = {
+            "p&id": "P&ID",
+            "pid": "P&ID",
+            "pfd": "PFD",
+            "process flow diagram": "PFD",
+            "system diagram": "System Diagram",
+            "data sheet": "Data Sheet",
+            "datasheet": "Data Sheet",
+            "isometric": "Isometric",
+            "ga": "GA Drawing",
+            "ga drawing": "GA Drawing",
+            "general arrangement": "GA Drawing",
+            "cause & effect": "Cause & Effect",
+            "cause and effect": "Cause & Effect",
+            "hazop": "Hazop",
+        }
+        for key, canonical in aliases.items():
+            if key in value:
+                return canonical
+        return ""
+
+    def _adaptive_grid(self, width: int, height: int, target_edge: int | None = None) -> tuple[int, int]:
+        """Compute the first-pass tile grid. The target balances crop coverage against
+        small-symbol readability; hard cases are re-cropped at higher magnification by the
+        targeted verification passes rather than forcing every region through a finer grid.
+        """
+        target_edge = target_edge or self.BASE_TILE_TARGET
         cols = max(1, -(-width // target_edge))    # ceil division
         rows = max(1, -(-height // target_edge))
         return cols, rows
@@ -447,6 +493,16 @@ class MetadataExtractor:
             return False
         item_lines = [l for l in tile_result.splitlines() if l.strip().startswith("-")]
         return len(item_lines) >= threshold
+
+    def _instrument_needs_zoom(self, tile_result: str) -> bool:
+        """Only pay for a second instrument look when the first pass admits uncertainty.
+        This keeps easy tiles single-pass while preserving the high-magnification escape
+        hatch for the tiny/blurred tags that actually need it.
+        """
+        if not tile_result:
+            return False
+        lower = tile_result.lower()
+        return "unreadable" in lower or "????" in tile_result or "?" in tile_result
 
     def _reconcile_pipe_specs(self, raw_specs: list[str], reference_spec: str, api_key: str) -> str:
         if not raw_specs:
@@ -509,6 +565,14 @@ class MetadataExtractor:
         context_text = self._call_vision(context_b64, mime, self.CONTEXT_PROMPT, api_key, max_tokens=1200)
         description = "=== CONTEXT ANALYSIS ===\n" + context_text
 
+        # If the rule-based classifier had no usable hint, the already-paid context pass
+        # can route the remaining work. This avoids running a full P&ID scan on a scanned
+        # data sheet/GA/matrix simply because its filename was uninformative.
+        if not doc_type_hint or doc_type_hint.strip() == "Unknown":
+            context_doc_type = self._doc_type_from_context(context_text)
+            if context_doc_type:
+                category = self._categorize_doc_type(context_doc_type)
+
         if category == "tabular":
             table_b64 = self._pil_to_b64(pil_image)
             table_text = self._call_vision(table_b64, mime, self.TABLE_FIELD_PROMPT, api_key, max_tokens=1500)
@@ -533,8 +597,8 @@ class MetadataExtractor:
             description += "\n\n=== DIMENSIONS AND CALLOUTS ===\n" + "\n---\n".join(callout_results)
 
             spec_results = []
-            spec_cols = max(4, -(-width // 1900))  # single-row strips: width-only
-            for tile in self._make_tiles(diagram_body, cols=spec_cols, rows=1, overlap_frac=0.1):
+            spec_cols = max(4, -(-width // self.BASE_TILE_TARGET))  # single-row strips: width-only
+            for tile in self._make_tiles(diagram_body, cols=spec_cols, rows=1, overlap_frac=0.10):
                 tile_b64 = self._pil_to_b64(tile)
                 result = self._call_vision(tile_b64, mime, self.PIPE_SPEC_PROMPT, api_key, max_tokens=300)
                 if result.strip():
@@ -548,22 +612,33 @@ class MetadataExtractor:
         # fixed 3x2-then-conditional-5x3 approach, which duplicated coverage on large
         # drawings while still leaving tiles above the model's internal resize cap) ---
         all_raw_tags = []
-        tile_texts = []
         i_cols, i_rows = self._adaptive_grid(width, height)
-        for i, tile in enumerate(self._make_tiles(pil_image, cols=i_cols, rows=i_rows, overlap_frac=0.12)):
+        for tile in self._make_tiles(pil_image, cols=i_cols, rows=i_rows, overlap_frac=0.12):
             tile_b64 = self._pil_to_b64(tile)
-            result = self._call_vision(tile_b64, mime, self.TILE_INSTRUMENT_PROMPT, api_key, max_tokens=600)
-            tile_texts.append(f"[Tile {i+1}]\n{result}")
+            result = self._call_vision(tile_b64, mime, self.TILE_INSTRUMENT_PROMPT, api_key, max_tokens=450)
             all_raw_tags.extend(self._parse_tag_list(result))
 
-        reconciled_tags = self._reconcile_tags(self._validate_tags_local(all_raw_tags), api_key)
+            # The broader first-pass tiles cut request count substantially. If the model
+            # explicitly says a tag is unreadable, split only that tile and inspect again.
+            if self._instrument_needs_zoom(result):
+                for sub in self._make_tiles(tile, cols=2, rows=2, overlap_frac=0.15):
+                    sub_b64 = self._pil_to_b64(sub)
+                    zoom_out = self._call_vision(
+                        sub_b64, mime, self.TILE_INSTRUMENT_PROMPT, api_key, max_tokens=300
+                    )
+                    all_raw_tags.extend(self._parse_tag_list(zoom_out))
+
+        # Local validation already removes invalid prefixes and exact duplicates. The old
+        # text-only LLM reconciliation call saw no image and received only already-valid
+        # tags, so it could not resolve visual ambiguity and added cost without evidence.
+        reconciled_tags = self._validate_tags_local(all_raw_tags)
 
         # --- Pass 3: Pipe spec reading -- horizontal strips across diagram body ---
         pipe_spec_results = []
         pipe_spec_zoom_results = []
         diagram_body = pil_image.crop((0, int(height * 0.05), width, int(height * 0.82)))
-        spec_cols = max(4, -(-diagram_body.size[0] // 1900))  # single-row strips: width-only
-        for tile in self._make_tiles(diagram_body, cols=spec_cols, rows=1, overlap_frac=0.1):
+        spec_cols = max(4, -(-diagram_body.size[0] // self.BASE_TILE_TARGET))  # single-row strips: width-only
+        for tile in self._make_tiles(diagram_body, cols=spec_cols, rows=1, overlap_frac=0.10):
             tile_b64 = self._pil_to_b64(tile)
             result = self._call_vision(tile_b64, mime, self.PIPE_SPEC_PROMPT, api_key, max_tokens=300)
             if result.strip():
@@ -602,7 +677,7 @@ class MetadataExtractor:
         v_cols, v_rows = self._adaptive_grid(diagram_body.size[0], diagram_body.size[1])
         for tile in self._make_tiles(diagram_body, cols=v_cols, rows=v_rows, overlap_frac=0.15):
             tile_b64 = self._pil_to_b64(tile)
-            result = self._call_vision(tile_b64, mime, self.VALVE_SURVEY_PROMPT, api_key, max_tokens=700)
+            result = self._call_vision(tile_b64, mime, self.VALVE_SURVEY_PROMPT, api_key, max_tokens=550)
             if result.strip() and len(result.strip()) > 20:
                 valve_results.append(result.strip())
 
@@ -612,7 +687,7 @@ class MetadataExtractor:
                 # into one crop) never triggers a self-reported "unknown" -- it just doesn't
                 # show up. This is what catches misses in clustered areas like a Gas Seal
                 # Panel corner with several fittings and instruments close together. ---
-                if self._needs_zoom_verification(result) or self._is_dense_tile(result):
+                if self._needs_zoom_verification(result) or self._is_dense_tile(result, threshold=6):
                     for sub in self._make_tiles(tile, cols=2, rows=2, overlap_frac=0.2):
                         sub_b64 = self._pil_to_b64(sub)
                         zoom_out = self._call_vision(
@@ -633,7 +708,6 @@ class MetadataExtractor:
             + "\n".join(reconciled_tags)
             + pipe_spec_section
             + valve_section
-            + "\n\n=== RAW TILE OUTPUTS ===\n" + "\n\n".join(tile_texts)
         )
 
         return description
@@ -768,6 +842,37 @@ class MetadataExtractor:
             return reconciled if reconciled else tags
         except Exception:
             return tags
+
+    def compact_vision_description(self, vision_text: str, section_names: tuple[str, ...] | None = None) -> str:
+        """Return only reconciled/structured vision sections for downstream LLM calls.
+
+        Older runs may still contain RAW TILE OUTPUTS; those are deliberately excluded
+        because they duplicate the reconciled instrument list and amplify downstream tokens.
+        """
+        if not vision_text:
+            return ""
+        sections: dict[str, str] = {}
+        current = None
+        buf: list[str] = []
+        for line in vision_text.splitlines():
+            m = re.match(r"^===\s*(.+?)\s*===$", line.strip())
+            if m:
+                if current is not None:
+                    sections[current] = "\n".join(buf).strip()
+                current = m.group(1).strip()
+                buf = []
+            elif current is not None:
+                buf.append(line)
+        if current is not None:
+            sections[current] = "\n".join(buf).strip()
+
+        wanted = section_names or tuple(k for k in sections if not k.startswith("RAW TILE OUTPUTS"))
+        chunks = []
+        for name in wanted:
+            body = sections.get(name, "").strip()
+            if body:
+                chunks.append(f"=== {name} ===\n{body}")
+        return "\n\n".join(chunks) if chunks else vision_text
 
     def extract_metadata(self, path: Path, text_sample: str, doc_type: str) -> dict:
         meta = {

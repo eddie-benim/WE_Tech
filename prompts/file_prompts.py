@@ -46,7 +46,8 @@ def build_file_analysis_prompt(
         vision_section = f"""
 ## Vision Analysis (GPT-4o image reading)
 The following was extracted by visually reading the diagram image. \
-This is the primary source for equipment, instrumentation, and layout details:
+This is the primary source for equipment, instrumentation, and layout details.
+Use it to populate the requested metadata, but do NOT repeat or quote the vision analysis in the JSON:
 
 {vision_description}
 """
@@ -92,8 +93,7 @@ The company uses the following file naming convention:
       "pressure": "<string or null>",
       "flow": "<string or null>"
     }},
-    "unique_elements": ["<notable or unusual elements>"],
-    "vision_description": "<full vision analysis text if provided, else null>"
+    "unique_elements": ["<notable or unusual elements>"]
   }},
   "confidence": "<high | medium | low>"
 }}

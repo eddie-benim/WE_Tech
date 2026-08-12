@@ -21,20 +21,12 @@ FLUID_TRACING_SYSTEM = (
     "PHASE: <gas / liquid / two-phase / unknown>\n"
     "SPLITS: <any branch points where the stream divides, and where each branch goes>\n"
     "NOTES: <flow direction indicators, control points, anything relevant>\n\n"
-    "FORMATTING RULES:\n"
-    "- Use plain text with actual line breaks between items\n"
-    "- Use dashes (-) for bullet points\n"
-    "- Use blank lines between sections\n"
-    "- Do NOT write \\n as a literal escape sequence -- use actual line breaks\n"
-    "- Do NOT output JSON, XML, or markdown code blocks\n"
-    "- If a field has no data, write N/A or omit the line entirely\n"
-    "- Keep output concise -- do not repeat section headers in the body\n"
+    "FORMAT: plain text with real line breaks and '-' bullets; no JSON/XML/code fences; "
+    "omit absent fields and keep the response concise.\n"
 )
 
 FLUID_TRACING_USER = (
-    "Trace every process fluid present in this diagram description. "
-    "Be exhaustive -- every stream, branch, vent, drain.\n\n"
-    "DIAGRAM DESCRIPTION:\n{vision_text}\n"
+    "ENGINEERING EVIDENCE:\n{vision_text}\n"
 )
 
 
@@ -61,20 +53,12 @@ PRESSURE_RATING_SYSTEM = (
     "- <Equipment or stream>: P = <value>, T = <value>\n\n"
     "SAFETY DEVICE SET POINTS:\n"
     "- <Tag>: Type = <PSV/RV/PSE/RD>, Set P = <value>, Relieving capacity = <value if stated>\n\n"
-    "FORMATTING RULES:\n"
-    "- Use plain text with actual line breaks between items\n"
-    "- Use dashes (-) for bullet points\n"
-    "- Use blank lines between sections\n"
-    "- Do NOT write \\n as a literal escape sequence -- use actual line breaks\n"
-    "- Do NOT output JSON, XML, or markdown code blocks\n"
-    "- If a field has no data, write N/A or omit the line entirely\n"
-    "- Keep output concise -- do not repeat section headers in the body\n"
+    "FORMAT: plain text with real line breaks and '-' bullets; no JSON/XML/code fences; "
+    "omit absent fields and keep the response concise.\n"
 )
 
 PRESSURE_RATING_USER = (
-    "Extract all pressure ratings, temperature ratings, design conditions, operating conditions,\n"
-    "alarm setpoints, and safety device settings from this diagram description.\n\n"
-    "DIAGRAM DESCRIPTION:\n{vision_text}\n"
+    "ENGINEERING EVIDENCE:\n{vision_text}\n"
 )
 
 
@@ -131,20 +115,12 @@ ENGINEERING_DATA_SYSTEM = (
     "- Approved: <initials/name> | Date: <date>\n\n"
     "OTHER ENGINEERING DATA:\n"
     "- <anything else of engineering significance>\n\n"
-    "FORMATTING RULES:\n"
-    "- Use plain text with actual line breaks between items\n"
-    "- Use dashes (-) for bullet points\n"
-    "- Use blank lines between sections\n"
-    "- Do NOT write \\n as a literal escape sequence -- use actual line breaks\n"
-    "- Do NOT output JSON, XML, or markdown code blocks\n"
-    "- If a field has no data, write N/A or omit the line entirely\n"
-    "- Keep output concise -- do not repeat section headers in the body\n"
+    "FORMAT: plain text with real line breaks and '-' bullets; no JSON/XML/code fences; "
+    "omit absent fields and keep the response concise.\n"
 )
 
 ENGINEERING_DATA_USER = (
-    "Extract all piping specifications, valve inventory, instrument loop data, engineering stamps,\n"
-    "and other engineering data from this diagram description.\n\n"
-    "DIAGRAM DESCRIPTION:\n{vision_text}\n"
+    "ENGINEERING EVIDENCE:\n{vision_text}\n"
 )
 
 
@@ -197,20 +173,12 @@ SIS_SAFETY_SYSTEM = (
     "- <all safety-critical text, markings, or notations on the diagram>\n\n"
     "SIS BOUNDARY:\n"
     "- <describe if a SIS boundary is shown and what it encompasses>\n\n"
-    "FORMATTING RULES:\n"
-    "- Use plain text with actual line breaks between items\n"
-    "- Use dashes (-) for bullet points\n"
-    "- Use blank lines between sections\n"
-    "- Do NOT write \\n as a literal escape sequence -- use actual line breaks\n"
-    "- Do NOT output JSON, XML, or markdown code blocks\n"
-    "- If a field has no data, write N/A or omit the line entirely\n"
-    "- Keep output concise -- do not repeat section headers in the body\n"
+    "FORMAT: plain text with real line breaks and '-' bullets; no JSON/XML/code fences; "
+    "omit absent fields and keep the response concise.\n"
 )
 
 SIS_SAFETY_USER = (
-    "Identify and document all safety-critical elements, SIS instruments, ESD valves,\n"
-    "interlocks, alarms, and safety annotations in this diagram description.\n\n"
-    "DIAGRAM DESCRIPTION:\n{vision_text}\n"
+    "ENGINEERING EVIDENCE:\n{vision_text}\n"
 )
 
 
@@ -241,19 +209,12 @@ CONTROL_VALVE_SYSTEM = (
     "- <list any HIC, HV, or manual stations>\n\n"
     "CONTROL SCHEME NOTES:\n"
     "- <any other control strategy observations>\n\n"
-    "FORMATTING RULES:\n"
-    "- Use plain text with actual line breaks between items\n"
-    "- Use dashes (-) for bullet points\n"
-    "- Use blank lines between sections\n"
-    "- Do NOT write \\n as a literal escape sequence -- use actual line breaks\n"
-    "- Do NOT output JSON, XML, or markdown code blocks\n"
-    "- If a field has no data, write N/A or omit the line entirely\n"
-    "- Keep output concise -- do not repeat section headers in the body\n"
+    "FORMAT: plain text with real line breaks and '-' bullets; no JSON/XML/code fences; "
+    "omit absent fields and keep the response concise.\n"
 )
 
 CONTROL_VALVE_USER = (
-    "Document every control valve and control loop in this diagram description with full detail.\n\n"
-    "DIAGRAM DESCRIPTION:\n{vision_text}\n"
+    "ENGINEERING EVIDENCE:\n{vision_text}\n"
 )
 
 
@@ -283,20 +244,12 @@ UTILITY_BATTERY_SYSTEM = (
     "- <Label>: References = <drawing or system referenced>\n\n"
     "INTERCONNECTING DRAWINGS:\n"
     "- <list any drawing numbers cross-referenced on this sheet>\n\n"
-    "FORMATTING RULES:\n"
-    "- Use plain text with actual line breaks between items\n"
-    "- Use dashes (-) for bullet points\n"
-    "- Use blank lines between sections\n"
-    "- Do NOT write \\n as a literal escape sequence -- use actual line breaks\n"
-    "- Do NOT output JSON, XML, or markdown code blocks\n"
-    "- If a field has no data, write N/A or omit the line entirely\n"
-    "- Keep output concise -- do not repeat section headers in the body\n"
+    "FORMAT: plain text with real line breaks and '-' bullets; no JSON/XML/code fences; "
+    "omit absent fields and keep the response concise.\n"
 )
 
 UTILITY_BATTERY_USER = (
-    "Document all utility connections, battery limits, tie-in points, vendor boundaries,\n"
-    "and off-sheet connectors in this diagram description.\n\n"
-    "DIAGRAM DESCRIPTION:\n{vision_text}\n"
+    "ENGINEERING EVIDENCE:\n{vision_text}\n"
 )
 
 
@@ -325,20 +278,12 @@ LINE_LIST_SYSTEM = (
     "| 0.5-DB9-7      | 0.5 in    | Seal Gas      | N/A        | None    | N/A      | N/A      |       |\n\n"
     "(Fill with actual data from the description. Add rows as needed.)\n\n"
     "After the table, note any line numbering convention observations.\n\n"
-    "FORMATTING RULES:\n"
-    "- Use plain text with actual line breaks between items\n"
-    "- Use dashes (-) for bullet points\n"
-    "- Use blank lines between sections\n"
-    "- Do NOT write \\n as a literal escape sequence -- use actual line breaks\n"
-    "- Do NOT output JSON, XML, or markdown code blocks\n"
-    "- If a field has no data, write N/A or omit the line entirely\n"
-    "- Keep output concise -- do not repeat section headers in the body\n"
+    "FORMAT: plain text with real line breaks and '-' bullets; no JSON/XML/code fences; "
+    "omit absent fields and keep the response concise.\n"
 )
 
 LINE_LIST_USER = (
-    "Generate a structured line list from this diagram description.\n"
-    "Document every pipe specification and line present with all available attributes.\n\n"
-    "DIAGRAM DESCRIPTION:\n{vision_text}\n"
+    "ENGINEERING EVIDENCE:\n{vision_text}\n"
 )
 
 

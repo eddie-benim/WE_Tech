@@ -100,7 +100,7 @@ class MetadataExtractor:
         "   - Vessels, drums, tanks\n"
         "   - Heat exchangers, coolers\n"
         "   - Skid boundaries and panel boundaries (dashed box labels)\n\n"
-        "4. PIPE SPECIFICATIONS: List any pipe spec labels visible (e.g. 0.5-089-7, 1.0-089-7, 2.0-256-216C)\n\n"
+        "4. PIPE SPECIFICATIONS: List any pipe spec labels visible (e.g. [line size]-XXX-X)\n\n"
         "5. PROCESS STREAMS: Named streams, supply lines, vent lines, drain lines\n\n"
         "6. NOTES/SAFETY: Any general notes, safety annotations, or legend content\n\n"
         "7. UNIQUE ELEMENTS: Only note elements that have specific engineering significance: "
@@ -139,7 +139,7 @@ class MetadataExtractor:
         "You are reading a NARROW HORIZONTAL STRIP of a P&ID engineering drawing.\n\n"
         "YOUR ONLY JOB: Find and list every pipe specification label visible in this strip.\n"
         "Pipe specs appear as text inside rectangular boxes on or adjacent to pipe lines.\n"
-        "They follow patterns like: SIZE-CLASS-SUFFIX (e.g. 0.5-DB9-7, 1.0-DB9-7, 2.0-256-216C, 1.0-356-416C)\n\n"
+        "They follow patterns like: SIZE-CLASS-SUFFIX (e.g. [line size]-XXX-X)\n\n"
         "CHARACTER AMBIGUITY -- this is critical for pipe specs:\n"
         "- The letter B (uppercase B) and the digit 8 are commonly confused. "
         "Look at the character carefully: B has two bumps on the right side, 8 has two symmetric loops.\n"
@@ -243,10 +243,10 @@ class MetadataExtractor:
         "OUTPUT FORMAT -- one item per line:\n"
         "- <valve/fitting type> | Line: <pipe spec> | Tag: <if present> | Ref#: <BOM number if present>\n"
         "Example (where [line size] should be something like 0.5 or 2.0 - the line size in inches):\n"
-        "- Check valve | Line:  [line size]-XXX-X | Tag: none | Ref#: XXX (BOM ref -- project BOM needed)\n"
-        "- Ball valve | Line:  [line size]-XXX-X | Tag: none | Ref#: XXX (BOM ref -- project BOM needed)\n"
-        "- Rupture disc | Line:  [line size]-XXX-X | Tag: none | Ref#: XXX (BOM ref -- project BOM needed)\n"
-        "- Orifice plate | Line:  [line size]-XXX-X | Tag: none | Ref#: XXX\n"
+        "- Check valve | Line: [line size]-XXX-X | Tag: none | Ref#: XXX (BOM ref -- project BOM needed)\n"
+        "- Ball valve | Line: [line size]-XXX-X | Tag: none | Ref#: XXX (BOM ref -- project BOM needed)\n"
+        "- Rupture disc | Line: [line size]-XXX-X | Tag: none | Ref#: XXX (BOM ref -- project BOM needed)\n"
+        "- Orifice plate | Line: [line size]-XXX-X | Tag: none | Ref#: XXX\n"
     )
 
     # --- Verification pass: re-examines a tile flagged as ambiguous by the first valve

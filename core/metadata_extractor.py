@@ -65,11 +65,6 @@ class MetadataExtractor:
         "- DO NOT guess or fabricate. If unsure of a digit, write the prefix and UNREADABLE (e.g. PDI-????)\n"
         "- Note any HI/LO/HH/LL setpoint values shown adjacent to bubbles\n\n"
         "OUTPUT FORMAT -- return ONLY a plain list, one tag per line, nothing else:\n"
-        "PDI-1610 (HI, LO)\n"
-        "PDIT-1610\n"
-        "FIT-1611 (HI, LO)\n"
-        "FCV-1611\n"
-        "UNREADABLE\n"
     )
 
     CONTEXT_PROMPT = (

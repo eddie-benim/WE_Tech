@@ -119,7 +119,7 @@ class MetadataExtractor:
         "1. Deduplicate -- merge identical tags\n"
         "2. Correct obvious character misreads using these rules:\n"
         "   - In tag PREFIXES: the letter I (capital i) is almost always an ISA function letter, not the digit 1\n"
-        "     e.g. PD1-1610 should be corrected to PDI-1610\n"
+        "     e.g. PD1-XXXX should be corrected to PDI-XXXX\n"
         "   - In tag PREFIXES: the digit 0 (zero) should not appear -- if you see it, "
         "check whether it is a misread O or whether the whole prefix is invalid\n"
         "   - In tag NUMBERS (after the hyphen): digits only are expected; letters I and O "

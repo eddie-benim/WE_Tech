@@ -65,10 +65,10 @@ class MetadataExtractor:
         "- DO NOT guess or fabricate. If unsure of a digit, write the prefix and UNREADABLE (e.g. PDI-????)\n"
         "- Note any HI/LO/HH/LL setpoint values shown adjacent to bubbles\n\n"
         "OUTPUT FORMAT -- return ONLY a plain list, one tag per line, nothing else:\n"
-        "PDI-1610 (HI, LO)\n"
-        "PDIT-1610\n"
-        "FIT-1611 (HI, LO)\n"
-        "FCV-1611\n"
+        "PDI-XXXX (HI, LO)\n"
+        "PDIT-XXXX\n"
+        "FIT-XXXX (HI, LO)\n"
+        "FCV-XXXX\n"
         "UNREADABLE\n"
     )
 
@@ -164,9 +164,8 @@ class MetadataExtractor:
         "All other specs get their own plain line, no prefix.\n\n"
         "OUTPUT: one pipe spec per line, nothing else.\n"
         "Example:\n"
-        "TYP: 0.5-DB9-7\n"
-        "1.0-DB9-7\n"
-        "2.0-256-216C\n"
+        "TYP: [line size]-XXX-X\n"
+        "[line size]-XXX-X"
     )
 
     PIPE_SPEC_DETAIL_ZOOM_PROMPT = (

@@ -250,6 +250,35 @@ class MetadataExtractor:
         "- Orifice plate | Line: 0.5-DB9-7 | Tag: none | Ref#: 259\n"
     )
 
+    # --- Combined survey: instruments + valves/fittings + pipe specs from ONE crop in ONE
+    # call. The three passes above previously tiled the same physical region of the drawing
+    # three separate times (instrument grid and valve grid were IDENTICAL on the test P&ID:
+    # 5x3 both), meaning the image itself -- the dominant cost per call -- was paid for
+    # 2-3x over for no additional coverage. This combines them, each section keeping its
+    # original domain instructions verbatim so nothing about HOW each category is read
+    # changes, only how many times the pixels are re-sent.
+    TILE_COMBINED_SURVEY_PROMPT = (
+        "You are examining a CROP of a P&ID or engineering diagram. Perform THREE separate "
+        "extraction tasks on this same crop and report all three, clearly delimited. Do not "
+        "let one task's findings bleed into another -- an instrument bubble is never a valve "
+        "symbol, and a pipe spec label is never a BOM reference number.\n\n"
+        "=== TASK 1: INSTRUMENT TAGS ===\n"
+        + TILE_INSTRUMENT_PROMPT.split("OUTPUT FORMAT", 1)[0] +
+        "\n=== TASK 2: VALVES AND FITTINGS ===\n"
+        + VALVE_SURVEY_PROMPT.split("OUTPUT FORMAT", 1)[0] +
+        "\n=== TASK 3: PIPE SPECIFICATIONS ===\n"
+        + PIPE_SPEC_PROMPT.split("OUTPUT FORMAT", 1)[0] +
+        "\n=== FINAL OUTPUT FORMAT ===\n"
+        "Return exactly this structure, nothing else:\n\n"
+        "INSTRUMENTS:\n"
+        "<one tag per line, as specified in Task 1 -- or 'none' if none visible>\n\n"
+        "VALVES:\n"
+        "<one item per line, as specified in Task 2 -- or 'none' if none visible>\n\n"
+        "PIPE SPECS:\n"
+        "<one spec per line, as specified in Task 3, including a TYP: prefix line if this "
+        "crop contains the instrumentation reference note -- or 'none' if none visible>\n"
+    )
+
     # --- Verification pass: re-examines a tile flagged as ambiguous by the first valve
     # survey pass. Distinct from PIPE_SPEC_PROMPT (previously aliased here in error --
     # that alias meant the "detail zoom" pass, when it existed, was reading pipe specs
@@ -478,6 +507,26 @@ class MetadataExtractor:
         rows = max(1, -(-height // target_edge))
         return cols, rows
 
+    def _split_combined_survey(self, text: str) -> tuple[str, str, str]:
+        """Split a TILE_COMBINED_SURVEY_PROMPT response into (instruments, valves, pipe_specs)."""
+        if not text:
+            return "", "", ""
+        sections = {"INSTRUMENTS": "", "VALVES": "", "PIPE SPECS": ""}
+        current = None
+        buf: list[str] = []
+        for line in text.splitlines():
+            stripped = line.strip().rstrip(":")
+            if stripped.upper() in sections:
+                if current is not None:
+                    sections[current] = "\n".join(buf).strip()
+                current = stripped.upper()
+                buf = []
+            elif current is not None:
+                buf.append(line)
+        if current is not None:
+            sections[current] = "\n".join(buf).strip()
+        return sections["INSTRUMENTS"], sections["VALVES"], sections["PIPE SPECS"]
+
     def _needs_zoom_verification(self, tile_result: str) -> bool:
         if not tile_result:
             return False
@@ -608,96 +657,70 @@ class MetadataExtractor:
 
         # --- category == "diagram": P&ID / System Diagram / PFD / Unknown -- full pipeline ---
 
-        # --- Pass 2: Instrument tags -- single adaptive-resolution pass (replaces the old
-        # fixed 3x2-then-conditional-5x3 approach, which duplicated coverage on large
-        # drawings while still leaving tiles above the model's internal resize cap) ---
+        # --- Passes 2-4 combined: instruments + valves + pipe specs, ONE tiling pass over
+        # the diagram body instead of three separate ones. On the reference test drawing the
+        # old instrument grid and valve grid were IDENTICAL (5x3 both) -- meaning the same
+        # pixels were being re-sent as fresh image tokens three times for no additional
+        # coverage. This pays for each crop's image tokens once and asks for all three
+        # categories from it, with each category's original domain instructions unchanged. ---
         all_raw_tags = []
-        i_cols, i_rows = self._adaptive_grid(width, height)
-        for tile in self._make_tiles(pil_image, cols=i_cols, rows=i_rows, overlap_frac=0.12):
-            tile_b64 = self._pil_to_b64(tile)
-            result = self._call_vision(tile_b64, mime, self.TILE_INSTRUMENT_PROMPT, api_key, max_tokens=450)
-            all_raw_tags.extend(self._parse_tag_list(result))
-
-            # The broader first-pass tiles cut request count substantially. If the model
-            # explicitly says a tag is unreadable, split only that tile and inspect again.
-            if self._instrument_needs_zoom(result):
-                for sub in self._make_tiles(tile, cols=2, rows=2, overlap_frac=0.15):
-                    sub_b64 = self._pil_to_b64(sub)
-                    zoom_out = self._call_vision(
-                        sub_b64, mime, self.TILE_INSTRUMENT_PROMPT, api_key, max_tokens=300
-                    )
-                    all_raw_tags.extend(self._parse_tag_list(zoom_out))
-
-        # Local validation already removes invalid prefixes and exact duplicates. The old
-        # text-only LLM reconciliation call saw no image and received only already-valid
-        # tags, so it could not resolve visual ambiguity and added cost without evidence.
-        reconciled_tags = self._validate_tags_local(all_raw_tags)
-
-        # --- Pass 3: Pipe spec reading -- horizontal strips across diagram body ---
+        valve_results = []
+        valve_zoom_results = []
         pipe_spec_results = []
         pipe_spec_zoom_results = []
-        diagram_body = pil_image.crop((0, int(height * 0.05), width, int(height * 0.82)))
-        spec_cols = max(4, -(-diagram_body.size[0] // self.BASE_TILE_TARGET))  # single-row strips: width-only
-        for tile in self._make_tiles(diagram_body, cols=spec_cols, rows=1, overlap_frac=0.10):
-            tile_b64 = self._pil_to_b64(tile)
-            result = self._call_vision(tile_b64, mime, self.PIPE_SPEC_PROMPT, api_key, max_tokens=300)
-            if result.strip():
-                pipe_spec_results.append(result.strip())
 
-                # Targeted zoom: fires on an explicit '?' (model flagged a char as unclear)
-                # or a dense strip (many labels in one crop -- exactly where digits from
-                # adjacent labels bleed into each other, as with the 356/736/750 case).
-                if "?" in result or self._is_dense_tile(result, threshold=3):
+        diagram_body = pil_image.crop((0, int(height * 0.03), width, int(height * 0.90)))
+        cols, rows = self._adaptive_grid(diagram_body.size[0], diagram_body.size[1])
+        for tile in self._make_tiles(diagram_body, cols=cols, rows=rows, overlap_frac=0.13):
+            tile_b64 = self._pil_to_b64(tile)
+            result = self._call_vision(
+                tile_b64, mime, self.TILE_COMBINED_SURVEY_PROMPT, api_key, max_tokens=1100
+            )
+            instr_section, valve_section_raw, spec_section = self._split_combined_survey(result)
+
+            all_raw_tags.extend(self._parse_tag_list(instr_section))
+            if self._instrument_needs_zoom(instr_section):
+                for sub in self._make_tiles(tile, cols=2, rows=2, overlap_frac=0.15):
+                    sub_b64 = self._pil_to_b64(sub)
+                    zoom_out = self._call_vision(sub_b64, mime, self.TILE_INSTRUMENT_PROMPT, api_key, max_tokens=300)
+                    all_raw_tags.extend(self._parse_tag_list(zoom_out))
+
+            if valve_section_raw.strip() and len(valve_section_raw.strip()) > 10:
+                valve_results.append(valve_section_raw.strip())
+                if self._needs_zoom_verification(valve_section_raw) or self._is_dense_tile(valve_section_raw, threshold=6):
+                    for sub in self._make_tiles(tile, cols=2, rows=2, overlap_frac=0.2):
+                        sub_b64 = self._pil_to_b64(sub)
+                        zoom_out = self._call_vision(sub_b64, mime, self.VALVE_DETAIL_ZOOM_PROMPT, api_key, max_tokens=500)
+                        if zoom_out.strip() and len(zoom_out.strip()) > 15:
+                            valve_zoom_results.append(zoom_out.strip())
+
+            if spec_section.strip() and spec_section.strip().lower() != "none":
+                pipe_spec_results.append(spec_section.strip())
+                if "?" in spec_section or self._is_dense_tile(spec_section, threshold=3):
                     for sub in self._make_tiles(tile, cols=2, rows=1, overlap_frac=0.2):
                         sub_b64 = self._pil_to_b64(sub)
-                        zoom_out = self._call_vision(
-                            sub_b64, mime, self.PIPE_SPEC_DETAIL_ZOOM_PROMPT, api_key, max_tokens=250
-                        )
+                        zoom_out = self._call_vision(sub_b64, mime, self.PIPE_SPEC_DETAIL_ZOOM_PROMPT, api_key, max_tokens=250)
                         if zoom_out.strip():
                             pipe_spec_zoom_results.append(zoom_out.strip())
+
+        reconciled_tags = self._validate_tags_local(all_raw_tags)
 
         raw_specs = []
         reference_spec = ""
         for block in pipe_spec_results + pipe_spec_zoom_results:
             for line in block.splitlines():
                 spec = line.strip().strip("-").strip()
-                if not spec:
+                if not spec or spec.lower() == "none":
                     continue
                 if spec.upper().startswith("TYP:"):
                     reference_spec = spec.split(":", 1)[1].strip()
                 else:
                     raw_specs.append(spec)
-
         reconciled_specs = self._reconcile_pipe_specs(raw_specs, reference_spec, api_key)
         pipe_spec_section = "\n=== PIPE SPECIFICATIONS (reconciled across tiles) ===\n" + reconciled_specs
 
-        # --- Pass 4: Valve survey -- adaptive grid over the diagram body, every tile ---
-        valve_results = []
-        zoom_results = []
-        v_cols, v_rows = self._adaptive_grid(diagram_body.size[0], diagram_body.size[1])
-        for tile in self._make_tiles(diagram_body, cols=v_cols, rows=v_rows, overlap_frac=0.15):
-            tile_b64 = self._pil_to_b64(tile)
-            result = self._call_vision(tile_b64, mime, self.VALVE_SURVEY_PROMPT, api_key, max_tokens=550)
-            if result.strip() and len(result.strip()) > 20:
-                valve_results.append(result.strip())
-
-                # --- Pass 5 (targeted): re-examine THIS tile at higher magnification if the
-                # first pass flagged ambiguity OR the tile is dense. Density matters because
-                # a silent miss or conflation (e.g. dropping one item among several packed
-                # into one crop) never triggers a self-reported "unknown" -- it just doesn't
-                # show up. This is what catches misses in clustered areas like a Gas Seal
-                # Panel corner with several fittings and instruments close together. ---
-                if self._needs_zoom_verification(result) or self._is_dense_tile(result, threshold=6):
-                    for sub in self._make_tiles(tile, cols=2, rows=2, overlap_frac=0.2):
-                        sub_b64 = self._pil_to_b64(sub)
-                        zoom_out = self._call_vision(
-                            sub_b64, mime, self.VALVE_DETAIL_ZOOM_PROMPT, api_key, max_tokens=500
-                        )
-                        if zoom_out.strip() and len(zoom_out.strip()) > 15:
-                            zoom_results.append(zoom_out.strip())
-
         reconciled_valves = self._reconcile_valve_survey(
-            valve_results + ([f"[Zoom verification]\n{z}" for z in zoom_results] if zoom_results else []),
+            valve_results + ([f"[Zoom verification]\n{z}" for z in valve_zoom_results] if valve_zoom_results else []),
             reconciled_tags,
             api_key,
         )
@@ -764,6 +787,7 @@ class MetadataExtractor:
                     {
                         "role": "user",
                         "content": [
+                            {"type": "text", "text": prompt},
                             {
                                 "type": "image_url",
                                 "image_url": {
@@ -771,7 +795,6 @@ class MetadataExtractor:
                                     "detail": "high",
                                 },
                             },
-                            {"type": "text", "text": prompt},
                         ],
                     }
                 ],

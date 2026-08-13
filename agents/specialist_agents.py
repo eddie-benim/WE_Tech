@@ -1,29 +1,33 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import json as _json
+
 import config
 from agents.base_agent import BaseAgent
 from core.metadata_extractor import MetadataExtractor
 from prompts.specialist_prompts import (
-    FLUID_TRACING_SYSTEM, FLUID_TRACING_USER,
-    PRESSURE_RATING_SYSTEM, PRESSURE_RATING_USER,
-    ENGINEERING_DATA_SYSTEM, ENGINEERING_DATA_USER,
-    SIS_SAFETY_SYSTEM, SIS_SAFETY_USER,
-    CONTROL_VALVE_SYSTEM, CONTROL_VALVE_USER,
-    UTILITY_BATTERY_SYSTEM, UTILITY_BATTERY_USER,
-    LINE_LIST_SYSTEM, LINE_LIST_USER,
+    FLUID_TRACING_SYSTEM,
+    PRESSURE_RATING_SYSTEM,
+    ENGINEERING_DATA_SYSTEM,
+    SIS_SAFETY_SYSTEM,
+    CONTROL_VALVE_SYSTEM,
+    UTILITY_BATTERY_SYSTEM,
+    LINE_LIST_SYSTEM,
     COORDINATOR_SYSTEM, COORDINATOR_USER,
-    PROJECT_ID_SYSTEM, PROJECT_ID_USER,
+    PROJECT_ID_SYSTEM,
 )
 
+# (system prompt, output-budget hint) -- the budget hints are summed to size the single
+# combined call's max_tokens rather than each specialist paying its own call overhead.
 SPECIALIST_CONFIG = {
-    "fluid_tracing":    (FLUID_TRACING_SYSTEM,    FLUID_TRACING_USER,    1500),
-    "pressure_ratings": (PRESSURE_RATING_SYSTEM,  PRESSURE_RATING_USER,  1000),
-    "engineering_data": (ENGINEERING_DATA_SYSTEM,  ENGINEERING_DATA_USER, 1200),
-    "sis_safety":       (SIS_SAFETY_SYSTEM,        SIS_SAFETY_USER,       1200),
-    "control_valves":   (CONTROL_VALVE_SYSTEM,     CONTROL_VALVE_USER,    1000),
-    "utility_battery":  (UTILITY_BATTERY_SYSTEM,   UTILITY_BATTERY_USER,   900),
-    "line_list":        (LINE_LIST_SYSTEM,          LINE_LIST_USER,        1000),
+    "fluid_tracing":    (FLUID_TRACING_SYSTEM,    1500),
+    "pressure_ratings": (PRESSURE_RATING_SYSTEM,  1000),
+    "engineering_data": (ENGINEERING_DATA_SYSTEM, 1200),
+    "sis_safety":       (SIS_SAFETY_SYSTEM,       1200),
+    "control_valves":   (CONTROL_VALVE_SYSTEM,    1000),
+    "utility_battery":  (UTILITY_BATTERY_SYSTEM,   900),
+    "line_list":        (LINE_LIST_SYSTEM,        1000),
 }
 
 DISPATCH_KEY_MAP = {
@@ -37,21 +41,6 @@ DISPATCH_KEY_MAP = {
 }
 
 _CONTEXT = "CONTEXT ANALYSIS"
-_INSTRUMENTS = "INSTRUMENT TAGS (multi-tile extraction)"
-_PIPE_SPECS = "PIPE SPECIFICATIONS (reconciled across tiles)"
-_VALVES = "VALVE AND FITTING SURVEY (reconciled across tiles)"
-
-# Each specialist receives only the evidence it can actually use. This preserves the
-# specialist separation while avoiding seven re-sends of the entire vision transcript.
-SPECIALIST_SECTIONS = {
-    "fluid_tracing":    (_CONTEXT, _INSTRUMENTS, _PIPE_SPECS, _VALVES),
-    "pressure_ratings": (_CONTEXT, _INSTRUMENTS, _PIPE_SPECS, _VALVES),
-    "engineering_data": (_CONTEXT, _INSTRUMENTS, _PIPE_SPECS, _VALVES),
-    "sis_safety":       (_CONTEXT, _INSTRUMENTS, _VALVES),
-    "control_valves":   (_CONTEXT, _INSTRUMENTS, _VALVES),
-    "utility_battery":  (_CONTEXT, _PIPE_SPECS, _VALVES),
-    "line_list":        (_CONTEXT, _PIPE_SPECS, _VALVES),
-}
 
 
 class SpecialistCoordinator(BaseAgent):
@@ -78,41 +67,114 @@ class SpecialistCoordinator(BaseAgent):
         ]
         self._log(f"Passes to run: {', '.join(active) if active else 'none'}")
 
-        results = {}
-        for result_key in active:
-            system, user_template, max_tok = SPECIALIST_CONFIG[result_key]
-            self._log(f"Running {result_key}...")
-            try:
-                evidence = self._specialist_context(result_key, vision_text)
-                output = self._chat(
-                    system=system,
-                    user=user_template.format(vision_text=evidence),
-                    max_tokens=max_tok,
-                )
-                if output.strip():
-                    results[result_key] = output
-                    self._log(f"  {result_key} complete ({len(output)} chars).")
-                else:
-                    self._log(f"  {result_key} returned empty -- skipping.")
-            except Exception as e:
-                self._log(f"  {result_key} failed: {e}")
+        from tools.file_tools import list_reference_files
+        context = self._vision_tools.compact_vision_description(vision_text, (_CONTEXT,))
+        ref_files = list_reference_files()
 
-        self._log("Running project identification...")
-        try:
-            project_id = self._run_project_id(vision_text, file_metadata or {})
-            if project_id.strip():
-                results["project_identification"] = project_id
-                self._log("Project identification complete.")
-        except Exception as e:
-            self._log(f"Project identification failed: {e}")
+        results = {}
+        deterministic_project_id = None
+        include_project_id_in_call = bool(ref_files)
+        if not ref_files:
+            # No database to cross-reference against -- a second LLM call can't add
+            # evidence beyond what the context pass already extracted, so resolve this
+            # deterministically instead of paying for a call that can only restate it.
+            deterministic_project_id = self._deterministic_project_id(context)
+
+        if active or include_project_id_in_call:
+            results = self._run_combined(
+                active, vision_text, context, file_metadata or {}, ref_files, include_project_id_in_call
+            )
+
+        if deterministic_project_id:
+            results["project_identification"] = deterministic_project_id
+            self._log("Project identification resolved deterministically (no reference DB).")
 
         return {"specialist_results": results, "dispatch": dispatch, "log": self.log}
 
-    def _specialist_context(self, result_key: str, vision_text: str) -> str:
-        sections = SPECIALIST_SECTIONS.get(result_key)
-        if not sections:
-            return self._vision_tools.compact_vision_description(vision_text)
-        return self._vision_tools.compact_vision_description(vision_text, sections)
+    def _run_combined(
+        self,
+        active: list[str],
+        vision_text: str,
+        context: str,
+        file_metadata: dict,
+        ref_files: list[dict],
+        include_project_id: bool,
+    ) -> dict:
+        """One API call covering every active specialist section (plus project ID when a
+        reference DB exists), instead of one call per section. Each section keeps its full
+        original domain instructions verbatim -- concatenated, not summarised -- so nothing
+        about analysis depth or precision changes. What's eliminated is paying for the
+        vision-transcript input and per-call system-prompt overhead N times over."""
+        if not active and not include_project_id:
+            return {}
+
+        evidence = self._vision_tools.compact_vision_description(vision_text)
+        keys = list(active)
+
+        system_parts = [
+            "You are a team of process/piping engineering specialists analysing a single "
+            "engineering drawing, working from a vision-extracted text description of that "
+            "drawing (not the image itself) -- trust only what the description states, never "
+            "invent details not present in it.\n\n"
+            "Produce EVERY section listed below in a SINGLE JSON response. Each section has "
+            "its own domain instructions and output format -- follow those instructions "
+            "exactly when writing that section's text. If a section's content genuinely "
+            "isn't present anywhere in the material provided, output an empty string for "
+            "that key rather than fabricating content.\n"
+        ]
+        for key in keys:
+            system, _budget = SPECIALIST_CONFIG[key]
+            system_parts.append(f"\n=== SECTION: {key} ===\n{system}")
+
+        user_parts = [f"=== VISION-EXTRACTED DESCRIPTION OF THE DRAWING ===\n{evidence}\n"]
+
+        if include_project_id:
+            keys.append("project_identification")
+            system_parts.append(f"\n=== SECTION: project_identification ===\n{PROJECT_ID_SYSTEM}")
+            meta_lines = [
+                "Drawing title: " + str(file_metadata.get("description", "unknown")),
+                "Client mentioned: " + str(file_metadata.get("client", "unknown")),
+                "Revision: " + str(file_metadata.get("revision", "unknown")),
+                "Current project_number field: " + str(file_metadata.get("project_number", "not set")),
+            ]
+            db_lines = ["- " + f["name"] + " (ext: " + f["extension"] + ")" for f in ref_files[:20]]
+            user_parts.append(
+                "\n=== METADATA CONTEXT (for project_identification) ===\n" + "\n".join(meta_lines)
+            )
+            user_parts.append(
+                "\n\n=== OTHER FILES IN DATABASE (for project_identification cross-reference) ===\n"
+                + "\n".join(db_lines)
+            )
+
+        system_parts.append(
+            "\n\nFINAL OUTPUT -- valid JSON only, no markdown fences, no commentary outside "
+            "the JSON object. One key per section above:\n{\n"
+            + ",\n".join(f'  "{k}": "<text for {k}, or empty string>"' for k in keys)
+            + "\n}\n"
+        )
+        user_parts.append(f"\n\nProduce JSON with exactly these keys: {', '.join(keys)}.")
+
+        max_tokens = min(max(sum(SPECIALIST_CONFIG[k][1] for k in active) + (400 if include_project_id else 0), 1500), 7000)
+
+        self._log(f"Running combined specialist call for: {', '.join(keys)} (1 API call instead of {len(keys)}).")
+        result = self._chat_json(system="".join(system_parts), user="".join(user_parts), max_tokens=max_tokens)
+
+        if isinstance(result, dict) and result.get("parse_error"):
+            self._log("Combined specialist call failed to parse -- returning empty results.")
+            return {}
+
+        out = {}
+        for key in keys:
+            value = result.get(key, "") if isinstance(result, dict) else ""
+            if isinstance(value, (dict, list)):
+                value = _json.dumps(value, indent=2)
+            value = str(value).strip()
+            if value and value.lower() not in ("n/a", "none", "not applicable"):
+                out[key] = value
+                self._log(f"  {key}: {len(value)} chars")
+            else:
+                self._log(f"  {key}: no content")
+        return out
 
     @staticmethod
     def _label_value(text: str, label: str) -> str:
@@ -120,63 +182,34 @@ class SpecialistCoordinator(BaseAgent):
         m = re.search(rf"(?im)^\s*[-*]?\s*{re.escape(label)}\s*:\s*(.+?)\s*$", text)
         return m.group(1).strip() if m else ""
 
-    def _run_project_id(self, vision_text: str, file_metadata: dict) -> str:
-        from tools.file_tools import list_reference_files
-
-        context = self._vision_tools.compact_vision_description(vision_text, (_CONTEXT,))
+    def _deterministic_project_id(self, context: str) -> str:
         explicit_project = self._label_value(context, "PROJECT NUMBER")
         project_name = self._label_value(context, "PROJECT NAME")
         client = self._label_value(context, "CLIENT") or self._label_value(context, "CLIENT NAME")
         drawing = self._label_value(context, "DRAWING NUMBER")
         wo_po = self._label_value(context, "W.O.") or self._label_value(context, "P.O.")
 
-        ref_files = list_reference_files()
         explicit_missing = not explicit_project or explicit_project.upper() in {
             "NOT STATED", "NOT DETERMINABLE", "N/A", "NONE"
         }
+        if explicit_missing:
+            project_value = "NOT DETERMINABLE FROM THIS DOCUMENT ALONE"
+            confidence = "none"
+            reasoning = "No explicit project number is stated and no database files are available for cross-reference."
+        else:
+            project_value = explicit_project
+            confidence = "high"
+            reasoning = "Project number is explicitly labelled in the drawing context."
 
-        # The context pass was explicitly instructed to distinguish drawing/PO numbers from
-        # project numbers. With no database files to cross-reference, another LLM call cannot
-        # add evidence. Return the same archivist conclusion deterministically.
-        if not ref_files:
-            if explicit_missing:
-                project_value = "NOT DETERMINABLE FROM THIS DOCUMENT ALONE"
-                confidence = "none"
-                reasoning = "No explicit project number is stated and no database files are available for cross-reference."
-            else:
-                project_value = explicit_project
-                confidence = "high"
-                reasoning = "Project number is explicitly labelled in the drawing context."
-            return (
-                f"PROJECT NUMBER: {project_value}\n"
-                f"PROJECT NAME: {project_name or 'N/A'}\n"
-                f"CLIENT: {client or 'N/A'}\n"
-                f"DRAWING NUMBER: {drawing or 'N/A'}\n"
-                f"W.O. / P.O.: {wo_po or 'N/A'}\n"
-                "INFERRED PROJECT MATCH: N/A\n"
-                f"CONFIDENCE: {confidence}\n"
-                f"REASONING: {reasoning}"
-            )
-
-        meta_lines = [
-            "Drawing title: " + str(file_metadata.get("description", "unknown")),
-            "Client mentioned: " + str(file_metadata.get("client", "unknown")),
-            "Revision: " + str(file_metadata.get("revision", "unknown")),
-            "Current project_number field: " + str(file_metadata.get("project_number", "not set")),
-            "Vision context: " + context[:1200],
-        ]
-        meta_summary = "\n".join(meta_lines)
-
-        db_lines = ["- " + f["name"] + " (ext: " + f["extension"] + ")" for f in ref_files[:20]]
-        db_summary = "\n".join(db_lines)
-
-        return self._chat(
-            system=PROJECT_ID_SYSTEM,
-            user=PROJECT_ID_USER.format(
-                metadata_summary=meta_summary,
-                db_files_summary=db_summary,
-            ),
-            max_tokens=400,
+        return (
+            f"PROJECT NUMBER: {project_value}\n"
+            f"PROJECT NAME: {project_name or 'N/A'}\n"
+            f"CLIENT: {client or 'N/A'}\n"
+            f"DRAWING NUMBER: {drawing or 'N/A'}\n"
+            f"W.O. / P.O.: {wo_po or 'N/A'}\n"
+            "INFERRED PROJECT MATCH: N/A\n"
+            f"CONFIDENCE: {confidence}\n"
+            f"REASONING: {reasoning}"
         )
 
     def _decide_dispatch(self, doc_type: str, vision_text: str) -> dict:

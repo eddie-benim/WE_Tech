@@ -163,9 +163,9 @@ class MetadataExtractor:
         "If you find this note box, prefix that one line with 'TYP:' (e.g. 'TYP: 0.5-DB9-7'). "
         "All other specs get their own plain line, no prefix.\n\n"
         "OUTPUT: one pipe spec per line, nothing else.\n"
-        "Example:\n"
+        "Example (where [line size] should be something like 0.5 or 2.0 - the line size in inches):\n"
         "TYP: [line size]-XXX-X\n"
-        "[line size]-XXX-X"
+        "[line size]-XXX-XXX"
     )
 
     PIPE_SPEC_DETAIL_ZOOM_PROMPT = (
@@ -234,7 +234,7 @@ class MetadataExtractor:
         "RULES:\n"
         "- List EVERY fitting visible regardless of size\n"
         "- For each item: identify its type, the pipe spec label on the line it is on, "
-        "any tag (e.g. FCV-1611, FL-1610A), and any adjacent reference number\n"
+        "any tag (e.g. FCV-XXXX, FL-XXXX), and any adjacent reference number\n"
         "- Reference numbers are small numbers (2-4 digits) near fittings -- "
         "note them as BOM reference numbers; state that a project BOM is needed to confirm meaning\n"
         "- Do NOT read instrument bubble tags (circles with text inside) -- focus only on fittings\n"
@@ -242,11 +242,11 @@ class MetadataExtractor:
         "- A dashed rectangle around a group of fittings indicates a typical/repeated assembly\n\n"
         "OUTPUT FORMAT -- one item per line:\n"
         "- <valve/fitting type> | Line: <pipe spec> | Tag: <if present> | Ref#: <BOM number if present>\n"
-        "Example:\n"
-        "- Check valve | Line: 0.5-DB9-7 | Tag: none | Ref#: 231 (BOM ref -- project BOM needed)\n"
-        "- Ball valve | Line: 0.5-DB9-7 | Tag: none | Ref#: 233 (BOM ref -- project BOM needed)\n"
-        "- Rupture disc | Line: 2.0-356-416C | Tag: none | Ref#: 401 (BOM ref -- project BOM needed)\n"
-        "- Orifice plate | Line: 0.5-DB9-7 | Tag: none | Ref#: 259\n"
+        "Example (where [line size] should be something like 0.5 or 2.0 - the line size in inches):\n"
+        "- Check valve | Line:  [line size]-XXX-X | Tag: none | Ref#: XXX (BOM ref -- project BOM needed)\n"
+        "- Ball valve | Line:  [line size]-XXX-X | Tag: none | Ref#: XXX (BOM ref -- project BOM needed)\n"
+        "- Rupture disc | Line:  [line size]-XXX-X | Tag: none | Ref#: XXX (BOM ref -- project BOM needed)\n"
+        "- Orifice plate | Line:  [line size]-XXX-X | Tag: none | Ref#: XXX\n"
     )
 
     # --- Verification pass: re-examines a tile flagged as ambiguous by the first valve
@@ -286,8 +286,8 @@ class MetadataExtractor:
         "from the same drawing.\n\n"
         "CRITICAL RULE -- READ BEFORE ANYTHING ELSE:\n"
         "An item identified by an explicit alphanumeric instrument tag (e.g. PSE-1682, "
-        "PDI-1610 -- letters followed by a hyphen and numbers) is a DIFFERENT PHYSICAL DEVICE "
-        "from an item identified only by a bare 2-4 digit BOM reference number (e.g. 401), "
+        "PDI-XXXX -- letters followed by a hyphen and numbers) is a DIFFERENT PHYSICAL DEVICE "
+        "from an item identified only by a bare 2-4 digit BOM reference number (e.g. 231), "
         "even if they are the same device TYPE (e.g. both rupture discs) and appear in the "
         "same general area of the drawing. NEVER merge a tagged instrument with an untagged "
         "BOM-ref fitting. If both appear in the source material, both must appear separately "

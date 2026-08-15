@@ -157,7 +157,7 @@ class SpecialistCoordinator(BaseAgent):
         max_tokens = min(max(sum(SPECIALIST_CONFIG[k][1] for k in active) + (400 if include_project_id else 0), 1500), 7000)
 
         self._log(f"Running combined specialist call for: {', '.join(keys)} (1 API call instead of {len(keys)}).")
-        result = self._chat_json(system="".join(system_parts), user="".join(user_parts), max_tokens=max_tokens)
+        result = self._chat_json(system="".join(system_parts), user="".join(user_parts), max_tokens=max_tokens, label="specialist_combined")
 
         if isinstance(result, dict) and result.get("parse_error"):
             self._log("Combined specialist call failed to parse -- returning empty results.")
@@ -259,6 +259,7 @@ class SpecialistCoordinator(BaseAgent):
             system=COORDINATOR_SYSTEM,
             user=COORDINATOR_USER.format(doc_type=dt, vision_excerpt=excerpt),
             max_tokens=250,
+            label="coordinator_dispatch",
         )
         if result.get("parse_error"):
             self._log("Coordinator parse error -- defaulting to all passes.")

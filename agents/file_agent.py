@@ -28,6 +28,7 @@ class FileAgent(BaseAgent):
         super().__init__(model)
         self._classifier = FileClassifier()
         self._extractor = MetadataExtractor()
+        self._specialist_usage_log: list[dict] = []
 
     def analyze_files(self, paths: list[Path]) -> list[dict]:
         self.log = []
@@ -99,6 +100,15 @@ class FileAgent(BaseAgent):
             self._log(f"  -> {result.get('doc_type', 'Unknown')} | {result.get('suggested_name', path.name)}")
 
         self._log("Analysis complete.")
+
+        combined_usage = self.usage_log + self._extractor.usage_log + self._specialist_usage_log
+        if combined_usage:
+            self._log("")
+            self._log("=== Token usage this run ===")
+            from agents.base_agent import format_usage_table
+            for line in format_usage_table(combined_usage).splitlines():
+                self._log(line)
+
         return results
 
     def _analyze_single(self, path: Path, naming_scheme: dict, reference_files: list[dict]) -> dict:
@@ -134,6 +144,7 @@ class FileAgent(BaseAgent):
                     doc_type_guess = rule_result.get("doc_type", "Unknown")
                     spec_output = coord.run(doc_type_guess, vision_description, file_metadata=rule_result.get("metadata", {}))
                     specialist_results = spec_output.get("specialist_results", {})
+                    self._specialist_usage_log.extend(coord.usage_log)
                     for log_line in spec_output.get("log", []):
                         self._log(f"  [specialist] {log_line}")
                 except Exception as e:
@@ -158,6 +169,7 @@ class FileAgent(BaseAgent):
             system=FILE_SYSTEM_PROMPT,
             user=user_prompt,
             max_tokens=1500,
+            label="file_classification",
         )
 
         if ai_result.get("parse_error"):
@@ -203,6 +215,7 @@ class FileAgent(BaseAgent):
             system=FILE_SYSTEM_PROMPT,
             user=prompt,
             max_tokens=300,
+            label="project_match",
         )
         if match.get("parse_error"):
             return {"matched_project_number": None, "matched_project_confidence": "none", "reasoning": "Model could not determine a match."}
@@ -225,6 +238,7 @@ class FileAgent(BaseAgent):
                 system=FILE_SYSTEM_PROMPT,
                 user=build_naming_scheme_prompt(reference_files),
                 max_tokens=400,
+                label="naming_scheme",
             )
             if not ai_scheme.get("parse_error"):
                 return ai_scheme

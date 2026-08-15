@@ -8,6 +8,26 @@ import re
 from pathlib import Path
 
 
+def _format_usage_table(usage_log: list[dict]) -> str:
+    if not usage_log:
+        return "No usage recorded."
+    totals: dict[str, dict] = {}
+    for entry in usage_log:
+        t = totals.setdefault(entry["label"], {"calls": 0, "prompt": 0, "completion": 0})
+        t["calls"] += 1
+        t["prompt"] += entry["prompt_tokens"]
+        t["completion"] += entry["completion_tokens"]
+    lines = [f"{'Label':<24}{'Calls':>7}{'Prompt':>10}{'Completion':>12}{'Total':>10}"]
+    grand_total = 0
+    for label, t in sorted(totals.items(), key=lambda kv: -(kv[1]["prompt"] + kv[1]["completion"])):
+        total = t["prompt"] + t["completion"]
+        grand_total += total
+        lines.append(f"{label:<24}{t['calls']:>7}{t['prompt']:>10}{t['completion']:>12}{total:>10}")
+    lines.append("-" * 63)
+    lines.append(f"{'TOTAL':<24}{'':>7}{'':>10}{'':>12}{grand_total:>10}")
+    return "\n".join(lines)
+
+
 class MetadataExtractor:
 
     # The first-pass tile target is deliberately a little larger than the old 1900 px
@@ -20,6 +40,20 @@ class MetadataExtractor:
         # In-memory cache prevents a late downstream failure from triggering the entire
         # expensive vision pipeline a second time in FileAgent's fallback path.
         self._vision_cache: dict[tuple[str, int, int, str], str] = {}
+        self.usage_log: list[dict] = []
+
+    def _track_usage(self, label: str, usage) -> None:
+        if usage is None:
+            return
+        self.usage_log.append({
+            "label": label,
+            "prompt_tokens": getattr(usage, "prompt_tokens", 0) or 0,
+            "completion_tokens": getattr(usage, "completion_tokens", 0) or 0,
+            "total_tokens": getattr(usage, "total_tokens", 0) or 0,
+        })
+
+    def usage_summary(self) -> str:
+        return _format_usage_table(self.usage_log)
 
     VALID_ISA_PREFIXES = {
         "PI", "PDI", "PDIT", "PT", "PIT", "PG", "PCV", "PSV", "PSE", "PAH", "PAL",
@@ -65,10 +99,10 @@ class MetadataExtractor:
         "- DO NOT guess or fabricate. If unsure of a digit, write the prefix and UNREADABLE (e.g. PDI-????)\n"
         "- Note any HI/LO/HH/LL setpoint values shown adjacent to bubbles\n\n"
         "OUTPUT FORMAT -- return ONLY a plain list, one tag per line, nothing else:\n"
-        "PDI-XXXX (HI, LO)\n"
-        "PDIT-XXXX\n"
-        "FIT-XXXX (HI, LO)\n"
-        "FCV-XXXX\n"
+        "PDI-1610 (HI, LO)\n"
+        "PDIT-1610\n"
+        "FIT-1611 (HI, LO)\n"
+        "FCV-1611\n"
         "UNREADABLE\n"
     )
 
@@ -100,8 +134,13 @@ class MetadataExtractor:
         "   - Vessels, drums, tanks\n"
         "   - Heat exchangers, coolers\n"
         "   - Skid boundaries and panel boundaries (dashed box labels)\n\n"
-        "4. PIPE SPECIFICATIONS: List any pipe spec labels visible (e.g. [line size]-XXX-X)\n\n"
-        "5. PROCESS STREAMS: Named streams, supply lines, vent lines, drain lines\n\n"
+        "4. PIPE SPECIFICATIONS: List any pipe spec labels visible (e.g. 0.5-089-7, 1.0-089-7, 2.0-256-216C)\n\n"
+        "5. PROCESS STREAMS AND CONNECTIVITY: Named streams, supply lines, vent lines, drain "
+        "lines. For each named stream, also note WHERE it enters or exits the diagram (a "
+        "labelled connection point, arrow, or edge-of-drawing tag) and, if visible, what "
+        "equipment or pipe spec it connects to first -- this connectivity information is "
+        "needed downstream to trace fluid paths, so capture it whenever it's legible even if "
+        "brief (e.g. 'SUPPLY GAS enters at left edge on 0.5-DB9-7, goes to gas seal panel')\n\n"
         "6. NOTES/SAFETY: Any general notes, safety annotations, or legend content\n\n"
         "7. UNIQUE ELEMENTS: Only note elements that have specific engineering significance: "
         "unusual equipment configurations, non-standard connections, safety-critical markings, "
@@ -119,7 +158,7 @@ class MetadataExtractor:
         "1. Deduplicate -- merge identical tags\n"
         "2. Correct obvious character misreads using these rules:\n"
         "   - In tag PREFIXES: the letter I (capital i) is almost always an ISA function letter, not the digit 1\n"
-        "     e.g. PD1-XXXX should be corrected to PDI-XXXX\n"
+        "     e.g. PD1-1610 should be corrected to PDI-1610\n"
         "   - In tag PREFIXES: the digit 0 (zero) should not appear -- if you see it, "
         "check whether it is a misread O or whether the whole prefix is invalid\n"
         "   - In tag NUMBERS (after the hyphen): digits only are expected; letters I and O "
@@ -139,7 +178,7 @@ class MetadataExtractor:
         "You are reading a NARROW HORIZONTAL STRIP of a P&ID engineering drawing.\n\n"
         "YOUR ONLY JOB: Find and list every pipe specification label visible in this strip.\n"
         "Pipe specs appear as text inside rectangular boxes on or adjacent to pipe lines.\n"
-        "They follow patterns like: SIZE-CLASS-SUFFIX (e.g. [line size]-XXX-X)\n\n"
+        "They follow patterns like: SIZE-CLASS-SUFFIX (e.g. 0.5-DB9-7, 1.0-DB9-7, 2.0-256-216C, 1.0-356-416C)\n\n"
         "CHARACTER AMBIGUITY -- this is critical for pipe specs:\n"
         "- The letter B (uppercase B) and the digit 8 are commonly confused. "
         "Look at the character carefully: B has two bumps on the right side, 8 has two symmetric loops.\n"
@@ -163,9 +202,10 @@ class MetadataExtractor:
         "If you find this note box, prefix that one line with 'TYP:' (e.g. 'TYP: 0.5-DB9-7'). "
         "All other specs get their own plain line, no prefix.\n\n"
         "OUTPUT: one pipe spec per line, nothing else.\n"
-        "Example (where [line size] should be something like 0.5 or 2.0 - the line size in inches):\n"
-        "TYP: [line size]-XXX-X\n"
-        "[line size]-XXX-XXX"
+        "Example:\n"
+        "TYP: 0.5-DB9-7\n"
+        "1.0-DB9-7\n"
+        "2.0-256-216C\n"
     )
 
     PIPE_SPEC_DETAIL_ZOOM_PROMPT = (
@@ -234,7 +274,7 @@ class MetadataExtractor:
         "RULES:\n"
         "- List EVERY fitting visible regardless of size\n"
         "- For each item: identify its type, the pipe spec label on the line it is on, "
-        "any tag (e.g. FCV-XXXX, FL-XXXX), and any adjacent reference number\n"
+        "any tag (e.g. FCV-1611, FL-1610A), and any adjacent reference number\n"
         "- Reference numbers are small numbers (2-4 digits) near fittings -- "
         "note them as BOM reference numbers; state that a project BOM is needed to confirm meaning\n"
         "- Do NOT read instrument bubble tags (circles with text inside) -- focus only on fittings\n"
@@ -242,11 +282,11 @@ class MetadataExtractor:
         "- A dashed rectangle around a group of fittings indicates a typical/repeated assembly\n\n"
         "OUTPUT FORMAT -- one item per line:\n"
         "- <valve/fitting type> | Line: <pipe spec> | Tag: <if present> | Ref#: <BOM number if present>\n"
-        "Example (where [line size] should be something like 0.5 or 2.0 - the line size in inches):\n"
-        "- Check valve | Line: [line size]-XXX-X | Tag: none | Ref#: XXX (BOM ref -- project BOM needed)\n"
-        "- Ball valve | Line: [line size]-XXX-X | Tag: none | Ref#: XXX (BOM ref -- project BOM needed)\n"
-        "- Rupture disc | Line: [line size]-XXX-X | Tag: none | Ref#: XXX (BOM ref -- project BOM needed)\n"
-        "- Orifice plate | Line: [line size]-XXX-X | Tag: none | Ref#: XXX\n"
+        "Example:\n"
+        "- Check valve | Line: 0.5-DB9-7 | Tag: none | Ref#: 231 (BOM ref -- project BOM needed)\n"
+        "- Ball valve | Line: 0.5-DB9-7 | Tag: none | Ref#: 233 (BOM ref -- project BOM needed)\n"
+        "- Rupture disc | Line: 2.0-356-416C | Tag: none | Ref#: 401 (BOM ref -- project BOM needed)\n"
+        "- Orifice plate | Line: 0.5-DB9-7 | Tag: none | Ref#: 259\n"
     )
 
     # --- Verification pass: re-examines a tile flagged as ambiguous by the first valve
@@ -286,8 +326,8 @@ class MetadataExtractor:
         "from the same drawing.\n\n"
         "CRITICAL RULE -- READ BEFORE ANYTHING ELSE:\n"
         "An item identified by an explicit alphanumeric instrument tag (e.g. PSE-1682, "
-        "PDI-XXXX -- letters followed by a hyphen and numbers) is a DIFFERENT PHYSICAL DEVICE "
-        "from an item identified only by a bare 2-4 digit BOM reference number (e.g. 231), "
+        "PDI-1610 -- letters followed by a hyphen and numbers) is a DIFFERENT PHYSICAL DEVICE "
+        "from an item identified only by a bare 2-4 digit BOM reference number (e.g. 401), "
         "even if they are the same device TYPE (e.g. both rupture discs) and appear in the "
         "same general area of the drawing. NEVER merge a tagged instrument with an untagged "
         "BOM-ref fitting. If both appear in the source material, both must appear separately "
@@ -527,16 +567,109 @@ class MetadataExtractor:
                     ),
                 }],
             )
+            self._track_usage("pipe_spec_reconcile", response.usage)
             return response.choices[0].message.content or ""
         except Exception as e:
             return "CONFIRMED SPECS:\n" + "\n".join(f"- {s}" for s in raw_specs) + f"\n\n[Reconciliation failed: {e}]"
+
+    def _dedupe_reconciled_valves(self, text: str) -> str:
+        """Deterministic safety net run AFTER LLM reconciliation (or in place of it when no
+        API key is available). The reconciliation call is asked to merge every duplicate
+        ref#/tag across potentially 15+ raw tile blocks in one pass -- observed behavior on
+        a real drawing showed it can partially succeed (correctly producing one merged
+        'Check valve or Needle valve' entry for ref 331) while ALSO leaving a second,
+        separate, unmerged entry for the same ref# elsewhere in the same output. This makes
+        that outcome structurally impossible: after this runs, each tag/ref# key appears
+        exactly once, with conflicting type reads folded into one entry rather than silently
+        picked or silently duplicated. Lines that don't match the expected format are passed
+        through unchanged rather than risk mangling content this function doesn't recognize.
+        """
+        if not text or not text.strip():
+            return text
+
+        entry_pattern = re.compile(
+            r"^-\s*(?P<type>[^|]+?)\s*\|\s*Line:\s*(?P<line>[^|]*?)\s*\|\s*Tag:\s*(?P<tag>[^|]*?)\s*\|\s*Ref#:\s*(?P<ref>.*)$"
+        )
+        unresolved_pattern = re.compile(
+            r"^-\s*Ref#/Tag:\s*(?P<key>[^|]+?)\s*\|\s*Candidates:\s*(?P<candidates>.*)$"
+        )
+
+        groups: dict[str, dict] = {}
+        order: list[str] = []
+        passthrough: list[str] = []
+
+        for raw_line in text.splitlines():
+            line = raw_line.strip()
+            if not line.startswith("-") or not line.strip("- "):
+                passthrough.append(raw_line)
+                continue
+
+            m = entry_pattern.match(line)
+            if m:
+                tag = m.group("tag").strip().rstrip(".")
+                ref = m.group("ref").strip().rstrip(".")
+                if tag and tag.lower() not in ("none", "n/a", "-", ""):
+                    dedupe_key = f"tag:{tag.lower()}"
+                elif ref and ref.lower() not in ("none", "n/a", "-", ""):
+                    dedupe_key = f"ref:{ref.lower()}"
+                else:
+                    passthrough.append(raw_line)
+                    continue
+                entry_type = m.group("type").strip()
+                line_spec = m.group("line").strip()
+                if dedupe_key not in groups:
+                    groups[dedupe_key] = {"types": [], "line": "", "tag": tag, "ref": ref}
+                    order.append(dedupe_key)
+                g = groups[dedupe_key]
+                for t in [t.strip() for t in re.split(r"\bor\b", entry_type) if t.strip()]:
+                    if t not in g["types"]:
+                        g["types"].append(t)
+                if line_spec and line_spec.lower() not in ("none", "n/a", "-", "") and not g["line"]:
+                    g["line"] = line_spec
+                continue
+
+            um = unresolved_pattern.match(line)
+            if um:
+                key_raw = um.group("key").strip()
+                dedupe_key = f"ref:{key_raw.lower()}" if key_raw.isdigit() else f"tag:{key_raw.lower()}"
+                candidate_types = [c.strip() for c in re.split(r"\bor\b", um.group("candidates")) if c.strip()]
+                if dedupe_key not in groups:
+                    groups[dedupe_key] = {
+                        "types": [], "line": "",
+                        "tag": key_raw if not key_raw.isdigit() else "",
+                        "ref": key_raw if key_raw.isdigit() else "",
+                    }
+                    order.append(dedupe_key)
+                g = groups[dedupe_key]
+                for t in candidate_types:
+                    if t and t not in g["types"]:
+                        g["types"].append(t)
+                continue
+
+            passthrough.append(raw_line)
+
+        if not groups:
+            return text  # nothing matched the expected shape -- return unchanged rather than risk mangling it
+
+        rebuilt = []
+        for dedupe_key in order:
+            g = groups[dedupe_key]
+            type_str = " or ".join(g["types"]) if g["types"] else "UNKNOWN"
+            suffix = "  (conflicting reads across tiles -- verify against drawing)" if len(g["types"]) > 1 else ""
+            rebuilt.append(
+                f"- {type_str} | Line: {g['line'] or 'not stated'} | "
+                f"Tag: {g['tag'] or 'none'} | Ref#: {g['ref'] or 'none'}{suffix}"
+            )
+
+        result_lines = rebuilt + [p for p in passthrough if p.strip()]
+        return "\n".join(result_lines)
 
     def _reconcile_valve_survey(self, raw_blocks: list[str], instrument_tags: list[str], api_key: str) -> str:
         if not raw_blocks:
             return "(none found)"
         key = api_key or os.environ.get("OPENAI_API_KEY", "")
         if not key:
-            return "\n---\n".join(raw_blocks)
+            return self._dedupe_reconciled_valves("\n".join(raw_blocks))
         from openai import OpenAI
         client = OpenAI(api_key=key)
         try:
@@ -551,9 +684,11 @@ class MetadataExtractor:
                     ),
                 }],
             )
-            return response.choices[0].message.content or ""
+            result = response.choices[0].message.content or ""
+            self._track_usage("valve_reconcile", response.usage)
+            return self._dedupe_reconciled_valves(result)
         except Exception as e:
-            return "\n---\n".join(raw_blocks) + f"\n\n[Reconciliation failed: {e}]"
+            return self._dedupe_reconciled_valves("\n".join(raw_blocks)) + f"\n\n[Reconciliation failed: {e}]"
 
     def _multi_pass_analysis(self, pil_image, mime: str, api_key: str, doc_type_hint: str = "") -> str:
         width, height = pil_image.size
@@ -561,7 +696,7 @@ class MetadataExtractor:
 
         # --- Pass 1: Context (full image, layout / title block / equipment) -- always runs ---
         context_b64 = self._pil_to_b64(pil_image)
-        context_text = self._call_vision(context_b64, mime, self.CONTEXT_PROMPT, api_key, max_tokens=1200)
+        context_text = self._call_vision(context_b64, mime, self.CONTEXT_PROMPT, api_key, max_tokens=1200, label="context")
         description = "=== CONTEXT ANALYSIS ===\n" + context_text
 
         # If the rule-based classifier had no usable hint, the already-paid context pass
@@ -574,13 +709,13 @@ class MetadataExtractor:
 
         if category == "tabular":
             table_b64 = self._pil_to_b64(pil_image)
-            table_text = self._call_vision(table_b64, mime, self.TABLE_FIELD_PROMPT, api_key, max_tokens=1500)
+            table_text = self._call_vision(table_b64, mime, self.TABLE_FIELD_PROMPT, api_key, max_tokens=1500, label="table_field")
             description += "\n\n=== FIELDS AND TABLES ===\n" + table_text
             return description
 
         if category == "matrix":
             matrix_b64 = self._pil_to_b64(pil_image)
-            matrix_text = self._call_vision(matrix_b64, mime, self.MATRIX_PROMPT, api_key, max_tokens=1500)
+            matrix_text = self._call_vision(matrix_b64, mime, self.MATRIX_PROMPT, api_key, max_tokens=1500, label="matrix")
             description += "\n\n=== MATRIX CONTENTS ===\n" + matrix_text
             return description
 
@@ -590,7 +725,7 @@ class MetadataExtractor:
             callout_results = []
             for tile in self._make_tiles(diagram_body, cols=cols, rows=rows, overlap_frac=0.12):
                 tile_b64 = self._pil_to_b64(tile)
-                result = self._call_vision(tile_b64, mime, self.DIMENSION_CALLOUT_PROMPT, api_key, max_tokens=500)
+                result = self._call_vision(tile_b64, mime, self.DIMENSION_CALLOUT_PROMPT, api_key, max_tokens=500, label="dimension_callout")
                 if result.strip():
                     callout_results.append(result.strip())
             description += "\n\n=== DIMENSIONS AND CALLOUTS ===\n" + "\n---\n".join(callout_results)
@@ -599,7 +734,7 @@ class MetadataExtractor:
             spec_cols = max(4, -(-width // self.BASE_TILE_TARGET))  # single-row strips: width-only
             for tile in self._make_tiles(diagram_body, cols=spec_cols, rows=1, overlap_frac=0.10):
                 tile_b64 = self._pil_to_b64(tile)
-                result = self._call_vision(tile_b64, mime, self.PIPE_SPEC_PROMPT, api_key, max_tokens=300)
+                result = self._call_vision(tile_b64, mime, self.PIPE_SPEC_PROMPT, api_key, max_tokens=300, label="iso_pipe_spec_tile")
                 if result.strip():
                     spec_results.append(result.strip())
             description += "\n\n=== PIPE SPECIFICATIONS ===\n" + "\n".join(spec_results)
@@ -612,7 +747,7 @@ class MetadataExtractor:
         i_cols, i_rows = self._adaptive_grid(width, height)
         for tile in self._make_tiles(pil_image, cols=i_cols, rows=i_rows, overlap_frac=0.12):
             tile_b64 = self._pil_to_b64(tile)
-            result = self._call_vision(tile_b64, mime, self.TILE_INSTRUMENT_PROMPT, api_key, max_tokens=450)
+            result = self._call_vision(tile_b64, mime, self.TILE_INSTRUMENT_PROMPT, api_key, max_tokens=450, label="instrument_tile")
             all_raw_tags.extend(self._parse_tag_list(result))
 
             # If the model explicitly says a tag is unreadable, split only that tile and
@@ -621,7 +756,7 @@ class MetadataExtractor:
                 for sub in self._make_tiles(tile, cols=2, rows=2, overlap_frac=0.15):
                     sub_b64 = self._pil_to_b64(sub)
                     zoom_out = self._call_vision(
-                        sub_b64, mime, self.TILE_INSTRUMENT_PROMPT, api_key, max_tokens=300
+                        sub_b64, mime, self.TILE_INSTRUMENT_PROMPT, api_key, max_tokens=300, label="instrument_zoom"
                     )
                     all_raw_tags.extend(self._parse_tag_list(zoom_out))
 
@@ -634,7 +769,7 @@ class MetadataExtractor:
         spec_cols = max(4, -(-diagram_body.size[0] // self.BASE_TILE_TARGET))  # single-row strips: width-only
         for tile in self._make_tiles(diagram_body, cols=spec_cols, rows=1, overlap_frac=0.10):
             tile_b64 = self._pil_to_b64(tile)
-            result = self._call_vision(tile_b64, mime, self.PIPE_SPEC_PROMPT, api_key, max_tokens=300)
+            result = self._call_vision(tile_b64, mime, self.PIPE_SPEC_PROMPT, api_key, max_tokens=300, label="pipe_spec_tile")
             if result.strip():
                 pipe_spec_results.append(result.strip())
 
@@ -645,7 +780,7 @@ class MetadataExtractor:
                     for sub in self._make_tiles(tile, cols=2, rows=1, overlap_frac=0.2):
                         sub_b64 = self._pil_to_b64(sub)
                         zoom_out = self._call_vision(
-                            sub_b64, mime, self.PIPE_SPEC_DETAIL_ZOOM_PROMPT, api_key, max_tokens=250
+                            sub_b64, mime, self.PIPE_SPEC_DETAIL_ZOOM_PROMPT, api_key, max_tokens=250, label="pipe_spec_zoom"
                         )
                         if zoom_out.strip():
                             pipe_spec_zoom_results.append(zoom_out.strip())
@@ -671,7 +806,7 @@ class MetadataExtractor:
         v_cols, v_rows = self._adaptive_grid(diagram_body.size[0], diagram_body.size[1])
         for tile in self._make_tiles(diagram_body, cols=v_cols, rows=v_rows, overlap_frac=0.15):
             tile_b64 = self._pil_to_b64(tile)
-            result = self._call_vision(tile_b64, mime, self.VALVE_SURVEY_PROMPT, api_key, max_tokens=550)
+            result = self._call_vision(tile_b64, mime, self.VALVE_SURVEY_PROMPT, api_key, max_tokens=550, label="valve_tile")
             if result.strip() and len(result.strip()) > 20:
                 valve_results.append(result.strip())
 
@@ -682,7 +817,7 @@ class MetadataExtractor:
                     for sub in self._make_tiles(tile, cols=2, rows=2, overlap_frac=0.2):
                         sub_b64 = self._pil_to_b64(sub)
                         zoom_out = self._call_vision(
-                            sub_b64, mime, self.VALVE_DETAIL_ZOOM_PROMPT, api_key, max_tokens=500
+                            sub_b64, mime, self.VALVE_DETAIL_ZOOM_PROMPT, api_key, max_tokens=500, label="valve_zoom"
                         )
                         if zoom_out.strip() and len(zoom_out.strip()) > 15:
                             zoom_results.append(zoom_out.strip())
@@ -741,7 +876,7 @@ class MetadataExtractor:
         img_data = pix.tobytes("png")
         return Image.open(io.BytesIO(img_data))
 
-    def _call_vision(self, image_b64: str, mime: str, prompt: str, api_key: str, max_tokens: int = 800) -> str:
+    def _call_vision(self, image_b64: str, mime: str, prompt: str, api_key: str, max_tokens: int = 800, label: str = "vision") -> str:
         from openai import OpenAI
         key = api_key or os.environ.get("OPENAI_API_KEY", "")
         if not key:
@@ -767,6 +902,7 @@ class MetadataExtractor:
                     }
                 ],
             )
+            self._track_usage(label, response.usage)
             return response.choices[0].message.content or ""
         except Exception as e:
             return f"Vision call failed: {e}"
@@ -796,43 +932,6 @@ class MetadataExtractor:
                 seen.add(tag)
                 validated.append(tag)
         return validated
-
-    def _reconcile_tags(self, tags: list[str], api_key: str) -> list[str]:
-        if not tags:
-            return []
-        raw_str = "\n".join(tags)
-        key = api_key or os.environ.get("OPENAI_API_KEY", "")
-        if not key:
-            return tags
-        from openai import OpenAI
-        client = OpenAI(api_key=key)
-        try:
-            response = client.chat.completions.create(
-                model="gpt-4o",
-                max_tokens=600,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": self.RECONCILIATION_PROMPT.format(raw_tags=raw_str),
-                    }
-                ],
-            )
-            result_text = response.choices[0].message.content or ""
-            reconciled = []
-            seen = set()
-            for line in result_text.splitlines():
-                line = line.strip()
-                if not line:
-                    continue
-                m = re.match(r"([A-Z]{2,5}-\d{3,6}[A-Z]?\??)", line)
-                if m:
-                    tag = m.group(1)
-                    if tag not in seen:
-                        seen.add(tag)
-                        reconciled.append(tag)
-            return reconciled if reconciled else tags
-        except Exception:
-            return tags
 
     def compact_vision_description(self, vision_text: str, section_names: tuple[str, ...] | None = None) -> str:
         """Return only reconciled/structured vision sections for downstream LLM calls.

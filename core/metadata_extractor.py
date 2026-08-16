@@ -88,7 +88,7 @@ class MetadataExtractor:
         "Always resolve in favour of the ISA-valid interpretation:\n"
         "  * 0 vs O vs C: a circle-like character in a tag prefix is almost always 0 (zero), not O or C\n"
         "  * 1 vs I vs l: a vertical stroke in a tag prefix is almost always I (the ISA letter), not 1 or l\n"
-        "  * Example: if you see C0 PDI or 7C PDI written on equipment, the likely reading is 70 PDI (number seventy, then PDI)\n"
+        "  * Example: if you see 'C4 PDI' or '4C PDI' written on equipment, the likely reading is '44 PDI' (a two-digit equipment number, then the ISA prefix)\n"
         "  * Example: if you see PD1 in a bubble, the likely correct reading is PDI (Pressure Differential Indicating)\n"
         "- COMPOUND BUBBLES: some instrument bubbles contain TWO stacked tags in a single circle "
         "(e.g. PDI on top and PDIT below in the same bubble, or FIT above FI). "
@@ -99,10 +99,10 @@ class MetadataExtractor:
         "- DO NOT guess or fabricate. If unsure of a digit, write the prefix and UNREADABLE (e.g. PDI-????)\n"
         "- Note any HI/LO/HH/LL setpoint values shown adjacent to bubbles\n\n"
         "OUTPUT FORMAT -- return ONLY a plain list, one tag per line, nothing else:\n"
-        "PDI-1610 (HI, LO)\n"
-        "PDIT-1610\n"
-        "FIT-1611 (HI, LO)\n"
-        "FCV-1611\n"
+        "PDI-XXXX (HI, LO)\n"
+        "PDIT-XXXX\n"
+        "FIT-YYYY (HI, LO)\n"
+        "FCV-YYYY\n"
         "UNREADABLE\n"
     )
 
@@ -134,13 +134,20 @@ class MetadataExtractor:
         "   - Vessels, drums, tanks\n"
         "   - Heat exchangers, coolers\n"
         "   - Skid boundaries and panel boundaries (dashed box labels)\n\n"
-        "4. PIPE SPECIFICATIONS: List any pipe spec labels visible (e.g. 0.5-089-7, 1.0-089-7, 2.0-256-216C)\n\n"
-        "5. PROCESS STREAMS AND CONNECTIVITY: Named streams, supply lines, vent lines, drain "
-        "lines. For each named stream, also note WHERE it enters or exits the diagram (a "
+        "4. PIPE SPECIFICATIONS: Do NOT attempt to precisely transcribe pipe spec label "
+        "characters here -- a dedicated higher-magnification pass elsewhere in this pipeline "
+        "handles that specifically, with safeguards for common character confusion (B/8, D/0, "
+        "etc.) that this pass doesn't have. Just note roughly how many distinct pipe spec "
+        "labels appear to be present, for orientation only.\n\n"
+        "5. PROCESS STREAMS AND CONNECTIVITY: List EVERY named stream visible, not just the "
+        "most prominent one -- this specifically includes ALTERNATE, BACKUP, SECONDARY, or "
+        "SPARE supply/vent/drain lines, which are easy to overlook next to a main line of the "
+        "same kind but are frequently drawn and labelled separately. Supply lines, vent lines, "
+        "drain lines. For each named stream, also note WHERE it enters or exits the diagram (a "
         "labelled connection point, arrow, or edge-of-drawing tag) and, if visible, what "
         "equipment or pipe spec it connects to first -- this connectivity information is "
         "needed downstream to trace fluid paths, so capture it whenever it's legible even if "
-        "brief (e.g. 'SUPPLY GAS enters at left edge on 0.5-DB9-7, goes to gas seal panel')\n\n"
+        "brief (e.g. 'SUPPLY GAS enters at left edge on [pipe spec], goes to [named equipment/area]')\n\n"
         "6. NOTES/SAFETY: Any general notes, safety annotations, or legend content\n\n"
         "7. UNIQUE ELEMENTS: Only note elements that have specific engineering significance: "
         "unusual equipment configurations, non-standard connections, safety-critical markings, "
@@ -158,7 +165,7 @@ class MetadataExtractor:
         "1. Deduplicate -- merge identical tags\n"
         "2. Correct obvious character misreads using these rules:\n"
         "   - In tag PREFIXES: the letter I (capital i) is almost always an ISA function letter, not the digit 1\n"
-        "     e.g. PD1-1610 should be corrected to PDI-1610\n"
+        "     e.g. PD1-XXXX should be corrected to PDI-XXXX\n"
         "   - In tag PREFIXES: the digit 0 (zero) should not appear -- if you see it, "
         "check whether it is a misread O or whether the whole prefix is invalid\n"
         "   - In tag NUMBERS (after the hyphen): digits only are expected; letters I and O "
@@ -178,14 +185,14 @@ class MetadataExtractor:
         "You are reading a NARROW HORIZONTAL STRIP of a P&ID engineering drawing.\n\n"
         "YOUR ONLY JOB: Find and list every pipe specification label visible in this strip.\n"
         "Pipe specs appear as text inside rectangular boxes on or adjacent to pipe lines.\n"
-        "They follow patterns like: SIZE-CLASS-SUFFIX (e.g. 0.5-DB9-7, 1.0-DB9-7, 2.0-256-216C, 1.0-356-416C)\n\n"
+        "They follow patterns like: SIZE-CLASS-SUFFIX (e.g. 0.5-XB2-1, 1.5-YC4-2A, 2.0-ZD6-3C)\n\n"
         "CHARACTER AMBIGUITY -- this is critical for pipe specs:\n"
         "- The letter B (uppercase B) and the digit 8 are commonly confused. "
         "Look at the character carefully: B has two bumps on the right side, 8 has two symmetric loops.\n"
         "- D and 0: D has a flat left vertical stroke, 0 is a closed oval.\n"
         "- Read EVERY character literally as you see it. Do NOT substitute or correct.\n"
-        "- If a spec reads 0.5-DB9-7, write 0.5-DB9-7. Do not write 0.5-089-7.\n"
-        "- If a spec reads 0.5-089-7, write 0.5-089-7. Do not write 0.5-DB9-7.\n\n"
+        "- If a spec reads 0.5-XB2-7, write 0.5-XB2-7. Do not write 0.5-X82-7 (B/8 are commonly confused).\n"
+        "- If a spec reads 0.5-YD4-7, write 0.5-YD4-7. Do not write 0.5-Y04-7 (D/0 are commonly confused).\n\n"
         "UNCERTAINTY -- read this before answering:\n"
         "- If a single character is genuinely unclear even after close inspection, mark that "
         "exact character position with ? (e.g. 1.0-3?6-416C). Do NOT invent a complete, "
@@ -199,13 +206,13 @@ class MetadataExtractor:
         "There is also a NOTE BOX typically in the lower left area that says:\n"
         "  [pipe spec] TYP. FOR INSTRUMENTATION AND REFERENCE SIGNAL LINES\n"
         "Read that spec carefully -- it defines the typical spec for instrument lines. "
-        "If you find this note box, prefix that one line with 'TYP:' (e.g. 'TYP: 0.5-DB9-7'). "
+        "If you find this note box, prefix that one line with 'TYP:' (e.g. 'TYP: 0.5-XB2-1'). "
         "All other specs get their own plain line, no prefix.\n\n"
         "OUTPUT: one pipe spec per line, nothing else.\n"
         "Example:\n"
-        "TYP: 0.5-DB9-7\n"
-        "1.0-DB9-7\n"
-        "2.0-256-216C\n"
+        "TYP: 0.5-XB2-1\n"
+        "1.0-YC4-2\n"
+        "2.0-ZD6-3C\n"
     )
 
     PIPE_SPEC_DETAIL_ZOOM_PROMPT = (
@@ -274,19 +281,36 @@ class MetadataExtractor:
         "RULES:\n"
         "- List EVERY fitting visible regardless of size\n"
         "- For each item: identify its type, the pipe spec label on the line it is on, "
-        "any tag (e.g. FCV-1611, FL-1610A), and any adjacent reference number\n"
+        "any tag (e.g. FCV-XXXX, FL-XXXXA), and any adjacent reference number\n"
         "- Reference numbers are small numbers (2-4 digits) near fittings -- "
         "note them as BOM reference numbers; state that a project BOM is needed to confirm meaning\n"
         "- Do NOT read instrument bubble tags (circles with text inside) -- focus only on fittings\n"
         "- If you cannot determine valve type, write UNKNOWN\n"
-        "- A dashed rectangle around a group of fittings indicates a typical/repeated assembly\n\n"
+        "- A dashed rectangle around a group of fittings indicates a typical/repeated assembly -- "
+        "treat any crop containing part of a dashed boundary box as a package/panel boundary "
+        "that likely packs several small items close together. Be extra thorough here: list "
+        "every distinct symbol individually, even ones partially cut off at the tile edge, "
+        "rather than summarising the group.\n"
+        "- SPATIAL ATTRIBUTION: When several reference numbers are stacked or clustered close "
+        "together near a group of equipment (e.g. a filter with isolation valves on either "
+        "side, or several small symbols packed into one area), each number belongs to its OWN "
+        "nearest distinct symbol -- work through the cluster one number at a time, matching "
+        "each to the single symbol it is closest to or connected to by a leader line. Do not "
+        "assign the same reference number to two different equipment types (e.g. a valve AND "
+        "the filter beside it) just because they sit near each other -- a stack of several "
+        "numbers almost always labels several DIFFERENT nearby items, not one item repeated.\n"
+        "- GENERIC/TYPICAL reference numbers: if a number sits inside or near a box labelled "
+        "'TYP.' or 'TYPICAL', it identifies a SYMBOL TYPE that legitimately recurs at multiple "
+        "separate locations on the drawing, not one unique item. Report each occurrence where "
+        "you find it, with its own correctly-read type and line -- do not treat the same "
+        "number appearing more than once, in different places, as an error to resolve.\n\n"
         "OUTPUT FORMAT -- one item per line:\n"
         "- <valve/fitting type> | Line: <pipe spec> | Tag: <if present> | Ref#: <BOM number if present>\n"
         "Example:\n"
-        "- Check valve | Line: 0.5-DB9-7 | Tag: none | Ref#: 231 (BOM ref -- project BOM needed)\n"
-        "- Ball valve | Line: 0.5-DB9-7 | Tag: none | Ref#: 233 (BOM ref -- project BOM needed)\n"
-        "- Rupture disc | Line: 2.0-356-416C | Tag: none | Ref#: 401 (BOM ref -- project BOM needed)\n"
-        "- Orifice plate | Line: 0.5-DB9-7 | Tag: none | Ref#: 259\n"
+        "- Check valve | Line: 0.5-XB2-1 | Tag: none | Ref#: 101 (BOM ref -- project BOM needed)\n"
+        "- Ball valve | Line: 0.5-XB2-1 | Tag: none | Ref#: 102 (BOM ref -- project BOM needed)\n"
+        "- Rupture disc | Line: 2.0-ZD6-3C | Tag: none | Ref#: 103 (BOM ref -- project BOM needed)\n"
+        "- Orifice plate | Line: 0.5-XB2-1 | Tag: none | Ref#: 104\n"
     )
 
     # --- Verification pass: re-examines a tile flagged as ambiguous by the first valve
@@ -310,7 +334,16 @@ class MetadataExtractor:
         "bars perpendicular to the line, no directional arrowhead. An arrowhead or wedge shape "
         "means check valve, not orifice.\n"
         "- Reference numbers (2-4 digit numbers near a symbol) identify a BOM line item, not a "
-        "valve type -- never infer type from the number, only from the drawn symbol shape.\n\n"
+        "valve type -- never infer type from the number, only from the drawn symbol shape.\n"
+        "- SPATIAL ATTRIBUTION: if this crop shows multiple reference numbers stacked or "
+        "clustered near one piece of equipment, match each number to its own single nearest "
+        "symbol individually -- do not let two numbers collapse onto one symbol, and do not "
+        "let one symbol's number bleed onto a neighboring symbol. Work through the cluster "
+        "top-to-bottom or left-to-right, one number at a time.\n"
+        "- If a number sits inside or near a box labelled 'TYP.'/'TYPICAL', it labels a symbol "
+        "TYPE reused at multiple separate locations, not a single unique item -- report what "
+        "you see at THIS location on its own merits, without treating a repeated number as "
+        "evidence you've mis-read something.\n\n"
         "For EACH symbol in this crop, give your answer AND a short reason distinguishing it "
         "from the confusable alternative above.\n\n"
         "OUTPUT FORMAT -- one item per line:\n"
@@ -323,37 +356,55 @@ class MetadataExtractor:
     VALVE_RECONCILE_PROMPT = (
         "You are a piping engineer reconciling a valve/fitting survey assembled from multiple "
         "overlapping crops of the same P&ID, plus the separately-extracted instrument tag list "
-        "from the same drawing.\n\n"
-        "CRITICAL RULE -- READ BEFORE ANYTHING ELSE:\n"
-        "An item identified by an explicit alphanumeric instrument tag (e.g. PSE-1682, "
-        "PDI-1610 -- letters followed by a hyphen and numbers) is a DIFFERENT PHYSICAL DEVICE "
-        "from an item identified only by a bare 2-4 digit BOM reference number (e.g. 401), "
+        "from the same drawing. Each block of raw readings below is labelled with the tile it "
+        "came from, e.g. '[Tile R2C3]' -- this tells you WHERE on the drawing that reading "
+        "came from.\n\n"
+        "CRITICAL RULE #1 -- READ BEFORE ANYTHING ELSE:\n"
+        "An item identified by an explicit alphanumeric instrument tag (e.g. PSE-XXXX, "
+        "PDI-YYYY -- letters followed by a hyphen and numbers) is a DIFFERENT PHYSICAL DEVICE "
+        "from an item identified only by a bare 2-4 digit BOM reference number (e.g. 501), "
         "even if they are the same device TYPE (e.g. both rupture discs) and appear in the "
         "same general area of the drawing. NEVER merge a tagged instrument with an untagged "
         "BOM-ref fitting. If both appear in the source material, both must appear separately "
         "in your output, each keeping its own identifier.\n\n"
+        "CRITICAL RULE #2 -- USE TILE POSITION, NOT JUST THE NUMBER, TO DECIDE WHAT'S A DUPLICATE:\n"
+        "P&ID reference numbers come in two kinds, and confusing them causes real errors:\n"
+        "  (a) UNIQUE instance identifiers -- refer to exactly one physical component.\n"
+        "  (b) GENERIC/TYPICAL callouts (often near a box marked 'TYP.') -- the SAME small "
+        "number legitimately labels EVERY occurrence of a recurring symbol type, at MULTIPLE "
+        "separate physical locations on the drawing. This is normal, not an error.\n"
+        "You cannot tell which kind a number is from the number alone -- use tile position:\n"
+        "  - If the SAME ref#/tag appears in the SAME tile or an ADJACENT tile (row and column "
+        "each differ by at most 1, e.g. R2C3 and R2C4), it is almost certainly ONE physical "
+        "item seen twice because tile crops overlap. Merge into one clean entry.\n"
+        "  - If the SAME ref#/tag appears in tiles that are NOT adjacent (e.g. R2C3 and R5C8), "
+        "it is almost certainly TWO DIFFERENT physical items that happen to share a reused "
+        "generic/typical label. Keep them as SEPARATE entries, each with its own tile and its "
+        "own independently-read type -- do NOT merge them and do NOT flag them as conflicting, "
+        "since there is no actual conflict: they are different real items.\n\n"
         "YOUR JOB:\n"
-        "1. Merge entries that are clearly the SAME physical item reported by more than one "
-        "overlapping tile or by the zoom-verification pass -- same BOM ref# or same tag, same "
-        "or compatible type and line. Keep one clean entry, preferring the zoom-verification "
-        "reading over the general survey reading when both exist for the same item.\n"
-        "2. Do NOT merge two entries just because they share a type and are near each other in "
-        "the text -- only merge when the ref#/tag matches, or the description makes clear it's "
-        "a repeated read of the identical item.\n"
-        "3. Preserve every distinct ref# and every distinct tag as its own entry. Do not drop "
-        "an item just because it's the only mention of that ref#.\n"
-        "4. If a ref# or tag appears with conflicting types across sources (e.g. 'check valve' "
-        "in one tile, 'gate valve' in another), do not silently pick one -- list it as "
-        "UNRESOLVED instead.\n\n"
+        "1. Apply Rule #2 above to decide, for every repeated ref#/tag, whether it's one item "
+        "re-seen (merge) or several distinct items sharing a label (keep separate).\n"
+        "2. When merging a genuine re-seen item, prefer the zoom-verification reading over the "
+        "general survey reading if both exist for it.\n"
+        "3. Do NOT merge two entries just because they share a type and sit near each other in "
+        "the text -- only merge per Rule #2.\n"
+        "4. Preserve every distinct item as its own entry. Do not drop an item just because "
+        "it's the only mention of that ref# in its tile.\n"
+        "5. If the SAME tile (or adjacent tiles) reports CONFLICTING types for what is clearly "
+        "one physical item (e.g. 'check valve' in R2C3, 'gate valve' in R2C4, same ref#, "
+        "immediately adjacent), that IS a genuine reading conflict -- list it as UNRESOLVED.\n\n"
         "INSTRUMENT TAGS ON THIS DRAWING (for cross-reference only -- do not re-list these as "
         "valve/fitting entries):\n{instrument_tags}\n\n"
-        "RAW VALVE/FITTING SURVEY (from multiple overlapping tiles, may include a "
-        "zoom-verification section):\n{raw_survey}\n\n"
-        "OUTPUT FORMAT -- one item per line:\n"
+        "RAW VALVE/FITTING SURVEY (tile-labelled blocks from multiple overlapping crops, may "
+        "include zoom-verification readings):\n{raw_survey}\n\n"
+        "OUTPUT FORMAT -- one item per line, keep the Tile field so the position that "
+        "justified your merge/keep-separate decision stays visible:\n"
         "- <valve/fitting type> | Line: <pipe spec if known> | Tag: <if present> | "
-        "Ref#: <if present>\n\n"
-        "UNRESOLVED (conflicting type across sources):\n"
-        "- Ref#/Tag: <value> | Candidates: <type A> or <type B>\n"
+        "Ref#: <if present> | Tile: <the tile this reading is from, or the merged tile if "
+        "combined>\n\n"
+        "UNRESOLVED (genuine conflicting type at the same/adjacent tile position):\n"
+        "- Ref#/Tag: <value> | Candidates: <type A> or <type B> | Tile: <tile>\n"
     )
 
     # --- Non-piping-diagram document passes (data sheets, isometrics/GA, matrices) ---
@@ -574,40 +625,48 @@ class MetadataExtractor:
 
     def _dedupe_reconciled_valves(self, text: str) -> str:
         """Deterministic safety net run AFTER LLM reconciliation (or in place of it when no
-        API key is available). The reconciliation call is asked to merge every duplicate
-        ref#/tag across potentially 15+ raw tile blocks in one pass -- observed behavior on
-        a real drawing showed it can partially succeed (correctly producing one merged
-        'Check valve or Needle valve' entry for ref 331) while ALSO leaving a second,
-        separate, unmerged entry for the same ref# elsewhere in the same output. This makes
-        that outcome structurally impossible: after this runs, each tag/ref# key appears
-        exactly once, with conflicting type reads folded into one entry rather than silently
-        picked or silently duplicated. Lines that don't match the expected format are passed
-        through unchanged rather than risk mangling content this function doesn't recognize.
+        API key is available). Groups entries by ref#/tag, then clusters each group by tile
+        adjacency: entries whose tiles are the same or adjacent get merged (a real duplicate
+        seen twice via overlapping crops); entries whose tiles are far apart stay as separate
+        output entries (a reference number legitimately reused across multiple distinct
+        physical items, e.g. a 'TYP.' callout). This is what prevents the dedup net itself
+        from re-introducing the exact bug it exists to fix -- collapsing distinct real items
+        into one false 'conflicting reads' entry just because they share a label. Lines that
+        don't match the expected format are passed through unchanged.
         """
         if not text or not text.strip():
             return text
 
+        header_pattern = re.compile(r"^\[Tile\s+(R\d+C\d+)")
         entry_pattern = re.compile(
-            r"^-\s*(?P<type>[^|]+?)\s*\|\s*Line:\s*(?P<line>[^|]*?)\s*\|\s*Tag:\s*(?P<tag>[^|]*?)\s*\|\s*Ref#:\s*(?P<ref>.*)$"
+            r"^-\s*(?P<type>[^|]+?)\s*\|\s*Line:\s*(?P<line>[^|]*?)\s*\|\s*Tag:\s*(?P<tag>[^|]*?)\s*\|\s*"
+            r"Ref#:\s*(?P<ref>[^|]*?)(?:\s*\|\s*Tile:\s*(?P<tile>R\d+C\d+))?\s*$"
         )
         unresolved_pattern = re.compile(
-            r"^-\s*Ref#/Tag:\s*(?P<key>[^|]+?)\s*\|\s*Candidates:\s*(?P<candidates>.*)$"
+            r"^-\s*Ref#/Tag:\s*(?P<key>[^|]+?)\s*\|\s*Candidates:\s*(?P<candidates>[^|]*?)"
+            r"(?:\s*\|\s*Tile:\s*(?P<tile>R\d+C\d+))?\s*$"
         )
 
-        groups: dict[str, dict] = {}
-        order: list[str] = []
+        raw_entries: list[dict] = []
         passthrough: list[str] = []
+        current_tile = None
 
         for raw_line in text.splitlines():
             line = raw_line.strip()
+            hm = header_pattern.match(line)
+            if hm:
+                current_tile = hm.group(1)
+                continue
+
             if not line.startswith("-") or not line.strip("- "):
-                passthrough.append(raw_line)
+                if line:
+                    passthrough.append(raw_line)
                 continue
 
             m = entry_pattern.match(line)
             if m:
-                tag = m.group("tag").strip().rstrip(".")
-                ref = m.group("ref").strip().rstrip(".")
+                tag = (m.group("tag") or "").strip().rstrip(".")
+                ref = (m.group("ref") or "").strip().rstrip(".")
                 if tag and tag.lower() not in ("none", "n/a", "-", ""):
                     dedupe_key = f"tag:{tag.lower()}"
                 elif ref and ref.lower() not in ("none", "n/a", "-", ""):
@@ -615,51 +674,75 @@ class MetadataExtractor:
                 else:
                     passthrough.append(raw_line)
                     continue
-                entry_type = m.group("type").strip()
-                line_spec = m.group("line").strip()
-                if dedupe_key not in groups:
-                    groups[dedupe_key] = {"types": [], "line": "", "tag": tag, "ref": ref}
-                    order.append(dedupe_key)
-                g = groups[dedupe_key]
-                for t in [t.strip() for t in re.split(r"\bor\b", entry_type) if t.strip()]:
-                    if t not in g["types"]:
-                        g["types"].append(t)
-                if line_spec and line_spec.lower() not in ("none", "n/a", "-", "") and not g["line"]:
-                    g["line"] = line_spec
+                raw_entries.append({
+                    "key": dedupe_key,
+                    "types": [t.strip() for t in re.split(r"\bor\b", m.group("type").strip()) if t.strip()],
+                    "line": m.group("line").strip(),
+                    "tag": tag, "ref": ref,
+                    "tile": m.group("tile") or current_tile or "",
+                })
                 continue
 
             um = unresolved_pattern.match(line)
             if um:
                 key_raw = um.group("key").strip()
                 dedupe_key = f"ref:{key_raw.lower()}" if key_raw.isdigit() else f"tag:{key_raw.lower()}"
-                candidate_types = [c.strip() for c in re.split(r"\bor\b", um.group("candidates")) if c.strip()]
-                if dedupe_key not in groups:
-                    groups[dedupe_key] = {
-                        "types": [], "line": "",
-                        "tag": key_raw if not key_raw.isdigit() else "",
-                        "ref": key_raw if key_raw.isdigit() else "",
-                    }
-                    order.append(dedupe_key)
-                g = groups[dedupe_key]
-                for t in candidate_types:
-                    if t and t not in g["types"]:
-                        g["types"].append(t)
+                raw_entries.append({
+                    "key": dedupe_key,
+                    "types": [c.strip() for c in re.split(r"\bor\b", um.group("candidates")) if c.strip()],
+                    "line": "",
+                    "tag": key_raw if not key_raw.isdigit() else "",
+                    "ref": key_raw if key_raw.isdigit() else "",
+                    "tile": um.group("tile") or current_tile or "",
+                })
                 continue
 
-            passthrough.append(raw_line)
+            if line:
+                passthrough.append(raw_line)
 
-        if not groups:
-            return text  # nothing matched the expected shape -- return unchanged rather than risk mangling it
+        if not raw_entries:
+            return text
+
+        by_key: dict[str, list[dict]] = {}
+        key_order: list[str] = []
+        for e in raw_entries:
+            if e["key"] not in by_key:
+                by_key[e["key"]] = []
+                key_order.append(e["key"])
+            by_key[e["key"]].append(e)
 
         rebuilt = []
-        for dedupe_key in order:
-            g = groups[dedupe_key]
-            type_str = " or ".join(g["types"]) if g["types"] else "UNKNOWN"
-            suffix = "  (conflicting reads across tiles -- verify against drawing)" if len(g["types"]) > 1 else ""
-            rebuilt.append(
-                f"- {type_str} | Line: {g['line'] or 'not stated'} | "
-                f"Tag: {g['tag'] or 'none'} | Ref#: {g['ref'] or 'none'}{suffix}"
-            )
+        for key in key_order:
+            clusters: list[list[dict]] = []
+            for e in by_key[key]:
+                placed = False
+                for cluster in clusters:
+                    if any(self._tiles_adjacent(e["tile"], m["tile"]) for m in cluster):
+                        cluster.append(e)
+                        placed = True
+                        break
+                if not placed:
+                    clusters.append([e])
+
+            for cluster in clusters:
+                types: list[str] = []
+                for e in cluster:
+                    for t in e["types"]:
+                        if t not in types:
+                            types.append(t)
+                line_spec = next(
+                    (e["line"] for e in cluster if e["line"] and e["line"].lower() not in ("none", "n/a", "-")),
+                    "not stated",
+                )
+                tag = next((e["tag"] for e in cluster if e["tag"]), "none")
+                ref = next((e["ref"] for e in cluster if e["ref"]), "none")
+                tiles_seen = sorted(set(e["tile"] for e in cluster if e["tile"]))
+                tile_str = "/".join(tiles_seen) if tiles_seen else "unknown"
+                type_str = " or ".join(types) if types else "UNKNOWN"
+                suffix = "  (conflicting reads at this location -- verify against drawing)" if len(types) > 1 else ""
+                rebuilt.append(
+                    f"- {type_str} | Line: {line_spec} | Tag: {tag} | Ref#: {ref} | Tile: {tile_str}{suffix}"
+                )
 
         result_lines = rebuilt + [p for p in passthrough if p.strip()]
         return "\n".join(result_lines)
@@ -804,11 +887,12 @@ class MetadataExtractor:
         valve_results = []
         zoom_results = []
         v_cols, v_rows = self._adaptive_grid(diagram_body.size[0], diagram_body.size[1])
-        for tile in self._make_tiles(diagram_body, cols=v_cols, rows=v_rows, overlap_frac=0.15):
+        for row, col, tile in self._make_tiles_indexed(diagram_body, cols=v_cols, rows=v_rows, overlap_frac=0.15):
+            tile_label = f"R{row}C{col}"
             tile_b64 = self._pil_to_b64(tile)
             result = self._call_vision(tile_b64, mime, self.VALVE_SURVEY_PROMPT, api_key, max_tokens=550, label="valve_tile")
             if result.strip() and len(result.strip()) > 20:
-                valve_results.append(result.strip())
+                valve_results.append(f"[Tile {tile_label}]\n{result.strip()}")
 
                 # Re-examine THIS tile at higher magnification if the first pass flagged
                 # ambiguity OR the tile is dense (a silent miss never self-reports as
@@ -820,10 +904,13 @@ class MetadataExtractor:
                             sub_b64, mime, self.VALVE_DETAIL_ZOOM_PROMPT, api_key, max_tokens=500, label="valve_zoom"
                         )
                         if zoom_out.strip() and len(zoom_out.strip()) > 15:
-                            zoom_results.append(zoom_out.strip())
+                            # Zoom subdivides within the SAME parent tile, so it shares that
+                            # tile's position label -- it's a closer look at the same region,
+                            # not a different location.
+                            zoom_results.append(f"[Tile {tile_label}, zoom verification]\n{zoom_out.strip()}")
 
         reconciled_valves = self._reconcile_valve_survey(
-            valve_results + ([f"[Zoom verification]\n{z}" for z in zoom_results] if zoom_results else []),
+            valve_results + zoom_results,
             reconciled_tags,
             api_key,
         )
@@ -854,6 +941,38 @@ class MetadataExtractor:
                 y1 = min(h, (row + 1) * tile_h + overlap_y)
                 tiles.append(image.crop((x0, y0, x1, y1)))
         return tiles
+
+    def _make_tiles_indexed(self, image, cols: int, rows: int, overlap_frac: float = 0.1):
+        """Same crop geometry as _make_tiles, but yields (row, col, tile) so callers can
+        stamp each reading with WHERE it came from. This costs nothing extra to compute --
+        the grid position is already known in code, no need to ask the model for it."""
+        w, h = image.size
+        tile_w = int(w / cols)
+        tile_h = int(h / rows)
+        overlap_x = int(tile_w * overlap_frac)
+        overlap_y = int(tile_h * overlap_frac)
+        out = []
+        for row in range(rows):
+            for col in range(cols):
+                x0 = max(0, col * tile_w - overlap_x)
+                y0 = max(0, row * tile_h - overlap_y)
+                x1 = min(w, (col + 1) * tile_w + overlap_x)
+                y1 = min(h, (row + 1) * tile_h + overlap_y)
+                out.append((row, col, image.crop((x0, y0, x1, y1))))
+        return out
+
+    @staticmethod
+    def _tiles_adjacent(tile_a: str, tile_b: str) -> bool:
+        """Two tile labels like 'R2C3' -- adjacent (including same) means overlapping crops
+        could plausibly have captured the same physical symbol twice."""
+        import re as _re
+        ma = _re.match(r"R(\d+)C(\d+)", tile_a or "")
+        mb = _re.match(r"R(\d+)C(\d+)", tile_b or "")
+        if not ma or not mb:
+            return False
+        r1, c1 = int(ma.group(1)), int(ma.group(2))
+        r2, c2 = int(mb.group(1)), int(mb.group(2))
+        return abs(r1 - r2) <= 1 and abs(c1 - c2) <= 1
 
     def _pil_to_b64(self, image) -> str:
         buf = io.BytesIO()

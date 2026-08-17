@@ -1,0 +1,15 @@
+fastapi
+uvicorn[standard]
+python-multipart
+# plus everything your existing agents/core already depend on:
+openai
+tenacity
+pymupdf
+pillow
+chromadb
+jinja2
+python-docx
+requests
+beautifulsoup4
+duckduckgo-search
+python-dotenv

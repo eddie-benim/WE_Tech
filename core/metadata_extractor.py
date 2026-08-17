@@ -419,26 +419,27 @@ class MetadataExtractor:
         "YOUR JOB:\n"
         "1. Apply Rule #2 above to decide, for every repeated ref#/tag, whether it's one item "
         "re-seen (merge) or several distinct items sharing a label (keep separate).\n"
-        "2. When merging a genuine re-seen item, prefer the zoom-verification reading over the "
-        "general survey reading if both exist for it.\n"
+        "2. When merging a genuine re-seen item where multiple readings report DIFFERENT types "
+        "for it, you MUST commit to a single type -- never output 'X or Y' or 'unresolved'. To "
+        "decide: prefer a zoom-verification reading over a general survey reading (it was taken "
+        "at higher magnification specifically to resolve ambiguity); if no zoom reading exists, "
+        "use whichever type the MAJORITY of readings agree on; if it's a genuine tie with no "
+        "zoom reading, use your own best single judgement from the descriptions given. Pick one "
+        "and move on -- a confident single answer is far more useful than a hedge, even if it's "
+        "occasionally wrong.\n"
         "3. Do NOT merge two entries just because they share a type and sit near each other in "
         "the text -- only merge per Rule #2.\n"
         "4. Preserve every distinct item as its own entry. Do not drop an item just because "
-        "it's the only mention of that ref# in its tile.\n"
-        "5. If the SAME tile (or adjacent tiles) reports CONFLICTING types for what is clearly "
-        "one physical item (e.g. 'check valve' in R2C3, 'gate valve' in R2C4, same ref#, "
-        "immediately adjacent), that IS a genuine reading conflict -- list it as UNRESOLVED.\n\n"
+        "it's the only mention of that ref# in its tile.\n\n"
         "INSTRUMENT TAGS ON THIS DRAWING (for cross-reference only -- do not re-list these as "
         "valve/fitting entries):\n{instrument_tags}\n\n"
         "RAW VALVE/FITTING SURVEY (tile-labelled blocks from multiple overlapping crops, may "
         "include zoom-verification readings):\n{raw_survey}\n\n"
-        "OUTPUT FORMAT -- one item per line, keep the Tile field so the position that "
-        "justified your merge/keep-separate decision stays visible:\n"
-        "- <valve/fitting type> | Line: <pipe spec if known> | Tag: <if present> | "
+        "OUTPUT FORMAT -- one item per line, ONE type per item, no hedging, keep the Tile field "
+        "so the position that justified your merge/keep-separate decision stays visible:\n"
+        "- <single valve/fitting type> | Line: <pipe spec if known> | Tag: <if present> | "
         "Ref#: <if present> | Tile: <the tile this reading is from, or the merged tile if "
-        "combined>\n\n"
-        "UNRESOLVED (genuine conflicting type at the same/adjacent tile position):\n"
-        "- Ref#/Tag: <value> | Candidates: <type A> or <type B> | Tile: <tile>\n"
+        "combined>\n"
     )
 
     # --- Non-piping-diagram document passes (data sheets, isometrics/GA, matrices) ---
@@ -628,6 +629,76 @@ class MetadataExtractor:
         lower = tile_result.lower()
         return "unreadable" in lower or "????" in tile_result or "?" in tile_result
 
+    def _dedupe_pipe_spec_output(self, text: str) -> str:
+        """Deterministic safety net for pipe spec reconciliation output. Removes any LOW
+        CONFIDENCE entry that's an exact duplicate of, or a truncated fragment of, an
+        already-CONFIRMED spec -- e.g. a zoom crop that cut off mid-label producing
+        '1.0-356-4' shouldn't survive as its own separate flagged entry once the full spec
+        '1.0-356-416C' is already confirmed. Also removes exact duplicate CONFIRMED entries.
+        The LLM reconciliation prompt only accounts for 1-2 character near-duplicates
+        (OCR-style misreads); truncation produces a different shape of near-duplicate that
+        needs this separate, code-level check.
+        """
+        if not text or not text.strip():
+            return text
+
+        confirmed: list[str] = []
+        low_confidence: list[tuple[str, str]] = []
+        section = None
+        for line in text.splitlines():
+            stripped = line.strip()
+            if stripped.upper().startswith("CONFIRMED SPECS"):
+                section = "confirmed"
+                continue
+            if stripped.upper().startswith("LOW CONFIDENCE"):
+                section = "low"
+                continue
+            if not stripped.startswith("-"):
+                continue
+            content = stripped.lstrip("-").strip()
+            if not content:
+                continue
+            if section == "confirmed":
+                if content not in confirmed:
+                    confirmed.append(content)
+            elif section == "low":
+                if ":" in content:
+                    spec, reason = content.split(":", 1)
+                else:
+                    spec, reason = content, ""
+                low_confidence.append((spec.strip(), reason.strip()))
+
+        if not confirmed and not low_confidence:
+            return text  # unrecognised shape -- pass through unchanged
+
+        def _is_fragment_of_confirmed(spec: str) -> bool:
+            for c in confirmed:
+                if spec == c:
+                    return True
+                # A truncated read is a prefix or suffix of the real spec (or vice versa),
+                # not just any substring match -- require a reasonable minimum length so
+                # short strings don't spuriously match unrelated specs.
+                if len(spec) >= 4 and (c.startswith(spec) or c.endswith(spec) or spec.startswith(c) or spec.endswith(c)):
+                    return True
+            return False
+
+        filtered_low = [(s, r) for s, r in low_confidence if s and not _is_fragment_of_confirmed(s)]
+        # De-dupe low-confidence entries against each other too.
+        seen_low = set()
+        deduped_low = []
+        for s, r in filtered_low:
+            if s not in seen_low:
+                seen_low.add(s)
+                deduped_low.append((s, r))
+
+        out = ["CONFIRMED SPECS:"]
+        out += [f"- {c}" for c in confirmed] if confirmed else ["- (none found)"]
+        if deduped_low:
+            out.append("")
+            out.append("LOW CONFIDENCE (verify against drawing):")
+            out += [f"- {s}: {r}" if r else f"- {s}" for s, r in deduped_low]
+        return "\n".join(out)
+
     def _reconcile_pipe_specs(self, raw_specs: list[str], reference_spec: str, api_key: str) -> str:
         if not raw_specs:
             return "CONFIRMED SPECS:\n(none found)"
@@ -637,7 +708,7 @@ class MetadataExtractor:
             for s in raw_specs:
                 if s not in seen:
                     seen.append(s)
-            return "CONFIRMED SPECS:\n" + "\n".join(f"- {s}" for s in seen)
+            return self._dedupe_pipe_spec_output("CONFIRMED SPECS:\n" + "\n".join(f"- {s}" for s in seen))
         from openai import OpenAI
         client = OpenAI(api_key=key)
         try:
@@ -653,9 +724,11 @@ class MetadataExtractor:
                 }],
             )
             self._track_usage("pipe_spec_reconcile", response.usage)
-            return response.choices[0].message.content or ""
+            result = response.choices[0].message.content or ""
+            return self._dedupe_pipe_spec_output(result)
         except Exception as e:
-            return "CONFIRMED SPECS:\n" + "\n".join(f"- {s}" for s in raw_specs) + f"\n\n[Reconciliation failed: {e}]"
+            fallback = "CONFIRMED SPECS:\n" + "\n".join(f"- {s}" for s in raw_specs)
+            return self._dedupe_pipe_spec_output(fallback) + f"\n\n[Reconciliation failed: {e}]"
 
     def _dedupe_reconciled_valves(self, text: str) -> str:
         """Deterministic safety net run AFTER LLM reconciliation (or in place of it when no
@@ -663,15 +736,17 @@ class MetadataExtractor:
         adjacency: entries whose tiles are the same or adjacent get merged (a real duplicate
         seen twice via overlapping crops); entries whose tiles are far apart stay as separate
         output entries (a reference number legitimately reused across multiple distinct
-        physical items, e.g. a 'TYP.' callout). This is what prevents the dedup net itself
-        from re-introducing the exact bug it exists to fix -- collapsing distinct real items
-        into one false 'conflicting reads' entry just because they share a label. Lines that
-        don't match the expected format are passed through unchanged.
+        physical items, e.g. a 'TYP.' callout). When a merged cluster has conflicting type
+        reads, this ALWAYS commits to a single type -- prefer a zoom-verification reading,
+        then majority vote, then the first seen -- rather than joining with 'or'. A hedge
+        like 'check valve or gate valve' isn't useful to someone building an inventory; a
+        best single guess, occasionally wrong, is more useful than a guaranteed non-answer.
+        Lines that don't match the expected format are passed through unchanged.
         """
         if not text or not text.strip():
             return text
 
-        header_pattern = re.compile(r"^\[Tile\s+(R\d+C\d+)")
+        header_pattern = re.compile(r"^\[Tile\s+(R\d+C\d+)(,\s*zoom verification)?")
         entry_pattern = re.compile(
             r"^-\s*(?P<type>[^|]+?)\s*\|\s*Line:\s*(?P<line>[^|]*?)\s*\|\s*Tag:\s*(?P<tag>[^|]*?)\s*\|\s*"
             r"Ref#:\s*(?P<ref>[^|]*?)(?:\s*\|\s*Tile:\s*(?P<tile>R\d+C\d+))?\s*$"
@@ -684,12 +759,14 @@ class MetadataExtractor:
         raw_entries: list[dict] = []
         passthrough: list[str] = []
         current_tile = None
+        current_is_zoom = False
 
         for raw_line in text.splitlines():
             line = raw_line.strip()
             hm = header_pattern.match(line)
             if hm:
                 current_tile = hm.group(1)
+                current_is_zoom = bool(hm.group(2))
                 continue
 
             if not line.startswith("-") or not line.strip("- "):
@@ -714,6 +791,7 @@ class MetadataExtractor:
                     "line": m.group("line").strip(),
                     "tag": tag, "ref": ref,
                     "tile": m.group("tile") or current_tile or "",
+                    "is_zoom": current_is_zoom,
                 })
                 continue
 
@@ -728,6 +806,7 @@ class MetadataExtractor:
                     "tag": key_raw if not key_raw.isdigit() else "",
                     "ref": key_raw if key_raw.isdigit() else "",
                     "tile": um.group("tile") or current_tile or "",
+                    "is_zoom": current_is_zoom,
                 })
                 continue
 
@@ -745,6 +824,18 @@ class MetadataExtractor:
                 key_order.append(e["key"])
             by_key[e["key"]].append(e)
 
+        def _resolve_single_type(cluster: list[dict]) -> str:
+            # Prefer a zoom-verification reading -- higher magnification, specifically taken
+            # to resolve ambiguity, so it's the most trustworthy single source available.
+            zoom_types = [t for e in cluster if e.get("is_zoom") for t in e["types"]]
+            if zoom_types:
+                return zoom_types[0]
+            all_types = [t for e in cluster for t in e["types"]]
+            if not all_types:
+                return "UNKNOWN"
+            from collections import Counter
+            return Counter(all_types).most_common(1)[0][0]
+
         rebuilt = []
         for key in key_order:
             clusters: list[list[dict]] = []
@@ -759,11 +850,7 @@ class MetadataExtractor:
                     clusters.append([e])
 
             for cluster in clusters:
-                types: list[str] = []
-                for e in cluster:
-                    for t in e["types"]:
-                        if t not in types:
-                            types.append(t)
+                type_str = _resolve_single_type(cluster)
                 line_spec = next(
                     (e["line"] for e in cluster if e["line"] and e["line"].lower() not in ("none", "n/a", "-")),
                     "not stated",
@@ -772,10 +859,8 @@ class MetadataExtractor:
                 ref = next((e["ref"] for e in cluster if e["ref"]), "none")
                 tiles_seen = sorted(set(e["tile"] for e in cluster if e["tile"]))
                 tile_str = "/".join(tiles_seen) if tiles_seen else "unknown"
-                type_str = " or ".join(types) if types else "UNKNOWN"
-                suffix = "  (conflicting reads at this location -- verify against drawing)" if len(types) > 1 else ""
                 rebuilt.append(
-                    f"- {type_str} | Line: {line_spec} | Tag: {tag} | Ref#: {ref} | Tile: {tile_str}{suffix}"
+                    f"- {type_str} | Line: {line_spec} | Tag: {tag} | Ref#: {ref} | Tile: {tile_str}"
                 )
 
         result_lines = rebuilt + [p for p in passthrough if p.strip()]
@@ -950,6 +1035,10 @@ class MetadataExtractor:
         )
         valve_section = "\n\n=== VALVE AND FITTING SURVEY (reconciled across tiles) ===\n" + reconciled_valves
 
+        # Now that both lists exist, drop any instrument tag whose number is actually a bare
+        # valve/fitting BOM reference that got an unrelated ISA prefix glued onto it.
+        reconciled_tags = self._cross_validate_instrument_tags(reconciled_tags, reconciled_valves)
+
         description += (
             "\n\n=== INSTRUMENT TAGS (multi-tile extraction) ===\n"
             + "\n".join(reconciled_tags)
@@ -1085,6 +1174,46 @@ class MetadataExtractor:
                 seen.add(tag)
                 validated.append(tag)
         return validated
+
+    def _cross_validate_instrument_tags(self, tags: list[str], valve_section_text: str) -> list[str]:
+        """Deterministic cross-check run after the valve survey is available. Instrument
+        loop numbers on a given drawing almost always follow one consistent digit-length
+        convention (e.g. all 4-digit on this drawing family). BOM/fitting reference numbers
+        are typically shorter and are drawn WITHOUT a letter prefix attached. When a "tag"
+        has a number that both (a) breaks the drawing's own dominant digit-length pattern
+        and (b) exactly matches a bare, untagged Ref# independently reported in the valve
+        survey, that's a strong signal it's a fabricated tag -- an ISA prefix from a nearby,
+        unrelated instrument bubble incorrectly glued onto a valve's BOM reference number.
+        This learns the convention from the drawing's own tags rather than hardcoding any
+        specific number, so it generalises across different drawings' own conventions.
+        """
+        if not tags or not valve_section_text:
+            return tags
+
+        lengths = []
+        for t in tags:
+            m = re.search(r"-(\d+)", t)
+            if m:
+                lengths.append(len(m.group(1)))
+        if not lengths:
+            return tags
+
+        from collections import Counter
+        dominant_length = Counter(lengths).most_common(1)[0][0]
+        # Only trust the dominant-length signal if it's a real majority, not a near-tie --
+        # with too few tags or a close split, this heuristic doesn't have enough evidence.
+        if Counter(lengths).most_common(1)[0][1] < max(3, len(lengths) * 0.5):
+            return tags
+
+        valve_refs = set(re.findall(r"Ref#:\s*(\d+)", valve_section_text))
+
+        cleaned = []
+        for tag in tags:
+            m = re.search(r"-(\d+)", tag)
+            if m and len(m.group(1)) != dominant_length and m.group(1) in valve_refs:
+                continue  # drop: very likely a fabricated tag built from a valve BOM ref#
+            cleaned.append(tag)
+        return cleaned
 
     def compact_vision_description(self, vision_text: str, section_names: tuple[str, ...] | None = None) -> str:
         """Return only reconciled/structured vision sections for downstream LLM calls.

@@ -630,19 +630,19 @@ class MetadataExtractor:
         return "unreadable" in lower or "????" in tile_result or "?" in tile_result
 
     def _dedupe_pipe_spec_output(self, text: str) -> str:
-        """Deterministic safety net for pipe spec reconciliation output. Removes any LOW
-        CONFIDENCE entry that's an exact duplicate of, or a truncated fragment of, an
-        already-CONFIRMED spec -- e.g. a zoom crop that cut off mid-label producing
-        '1.0-356-4' shouldn't survive as its own separate flagged entry once the full spec
-        '1.0-356-416C' is already confirmed. Also removes exact duplicate CONFIRMED entries.
-        The LLM reconciliation prompt only accounts for 1-2 character near-duplicates
-        (OCR-style misreads); truncation produces a different shape of near-duplicate that
-        needs this separate, code-level check.
+        """Deterministic safety net for pipe spec reconciliation output. Consolidates the
+        CONFIRMED list itself (not just LOW CONFIDENCE against CONFIRMED) so a truncated
+        zoom-crop read that the LLM placed directly into CONFIRMED -- e.g. '1.0-356-4'
+        alongside the fuller '1.0-356-416C' -- gets absorbed into the fuller reading instead
+        of surviving as its own separate confirmed entry. Also removes LOW CONFIDENCE entries
+        that duplicate or fragment a confirmed spec. The LLM reconciliation prompt only
+        accounts for 1-2 character near-duplicates (OCR-style misreads); truncation produces
+        a different shape of near-duplicate that needs this separate, code-level check.
         """
         if not text or not text.strip():
             return text
 
-        confirmed: list[str] = []
+        confirmed_raw: list[str] = []
         low_confidence: list[tuple[str, str]] = []
         section = None
         for line in text.splitlines():
@@ -659,8 +659,8 @@ class MetadataExtractor:
             if not content:
                 continue
             if section == "confirmed":
-                if content not in confirmed:
-                    confirmed.append(content)
+                if content not in confirmed_raw:
+                    confirmed_raw.append(content)
             elif section == "low":
                 if ":" in content:
                     spec, reason = content.split(":", 1)
@@ -668,17 +668,32 @@ class MetadataExtractor:
                     spec, reason = content, ""
                 low_confidence.append((spec.strip(), reason.strip()))
 
-        if not confirmed and not low_confidence:
+        if not confirmed_raw and not low_confidence:
             return text  # unrecognised shape -- pass through unchanged
+
+        def _is_fragment_pair(shorter: str, longer: str) -> bool:
+            # Require a reasonable minimum length so short strings don't spuriously
+            # match unrelated specs, and only treat it as a fragment if it's genuinely
+            # shorter (equal-length distinct strings are never fragments of each other).
+            if len(shorter) < 4 or len(shorter) >= len(longer):
+                return False
+            return longer.startswith(shorter) or longer.endswith(shorter)
+
+        # Consolidate CONFIRMED against itself: process longest-first, so a fuller
+        # reading is always accepted before a shorter fragment of it is considered,
+        # and the fragment gets dropped once its fuller counterpart is already kept.
+        confirmed_by_length = sorted(confirmed_raw, key=len, reverse=True)
+        kept: list[str] = []
+        for spec in confirmed_by_length:
+            if not any(_is_fragment_pair(spec, k) for k in kept):
+                kept.append(spec)
+        # Restore original relative order for readability.
+        order_index = {s: i for i, s in enumerate(confirmed_raw)}
+        confirmed = sorted(kept, key=lambda s: order_index[s])
 
         def _is_fragment_of_confirmed(spec: str) -> bool:
             for c in confirmed:
-                if spec == c:
-                    return True
-                # A truncated read is a prefix or suffix of the real spec (or vice versa),
-                # not just any substring match -- require a reasonable minimum length so
-                # short strings don't spuriously match unrelated specs.
-                if len(spec) >= 4 and (c.startswith(spec) or c.endswith(spec) or spec.startswith(c) or spec.endswith(c)):
+                if spec == c or _is_fragment_pair(spec, c) or _is_fragment_pair(c, spec):
                     return True
             return False
 
